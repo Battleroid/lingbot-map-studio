@@ -2,7 +2,7 @@
 
 import { Line } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 import { useViewerStore } from "@/lib/viewerStore";
@@ -10,6 +10,10 @@ import { useViewerStore } from "@/lib/viewerStore";
 export interface CameraPose {
   position: [number, number, number];
   quaternion: [number, number, number, number];
+  /** Vertical FOV in degrees, derived from the frame's intrinsic + height.
+   *  When playing back, the three.js camera's fov is set to match so the
+   *  POV matches the source footage's framing. */
+  fov_y_deg?: number;
 }
 
 interface Props {
@@ -117,11 +121,62 @@ export function CameraPath({ poses, recordedFps }: Props) {
     return qa.clone().slerp(qb, t).multiply(COLMAP_TO_THREE);
   }, [a, b, t]);
 
+  // Apply recorded FOV during playback so the POV matches what the source
+  // camera saw. Remember the pre-playback FOV so we can restore it afterwards.
+  const savedFovRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!playing || !a || !b) return;
     camera.position.copy(currentPos);
     camera.quaternion.copy(currentQuat);
+
+    // three.js PerspectiveCamera.fov is in degrees. Set it from the recorded
+    // per-frame FOV if available.
+    if (!("fov" in camera)) return;
+    const persp = camera as unknown as {
+      fov: number;
+      updateProjectionMatrix: () => void;
+    };
+    if (savedFovRef.current === null) savedFovRef.current = persp.fov;
+
+    const fov = a.fov_y_deg;
+    if (typeof fov === "number" && Number.isFinite(fov) && fov > 5 && fov < 170) {
+      if (Math.abs(persp.fov - fov) > 0.1) {
+        persp.fov = fov;
+        persp.updateProjectionMatrix();
+      }
+    }
   }, [playing, camera, currentPos, currentQuat, a, b]);
+
+  // Restore the original FOV when playback ends / component unmounts.
+  useEffect(() => {
+    return () => {
+      if (savedFovRef.current === null) return;
+      if (!("fov" in camera)) return;
+      const persp = camera as unknown as {
+        fov: number;
+        updateProjectionMatrix: () => void;
+      };
+      persp.fov = savedFovRef.current;
+      persp.updateProjectionMatrix();
+      savedFovRef.current = null;
+    };
+  }, [camera]);
+
+  useEffect(() => {
+    // Reset FOV when playback stops (not just on unmount) so returning to
+    // free orbit uses the standard 45°.
+    if (playing) return;
+    if (savedFovRef.current === null) return;
+    if (!("fov" in camera)) return;
+    const persp = camera as unknown as {
+      fov: number;
+      updateProjectionMatrix: () => void;
+    };
+    persp.fov = savedFovRef.current;
+    persp.updateProjectionMatrix();
+    savedFovRef.current = null;
+  }, [playing, camera]);
 
   if (!showCameraPath || positions.length < 2) return null;
   return (

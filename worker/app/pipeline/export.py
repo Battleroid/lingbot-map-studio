@@ -198,6 +198,9 @@ async def export_reconstruction(
 
     # Save the camera trajectory so the viewer can draw the path and play
     # it back. extrinsic is c2w (S, 3, 4) — translation is the last column.
+    # Also record each frame's vertical FOV (computed from intrinsic fy +
+    # image height) so the playback camera matches the source footage; the
+    # default three.js 45° FOV is too narrow for most action/drone cams.
     def _write_camera_path() -> Path:
         from scipy.spatial.transform import Rotation
 
@@ -211,13 +214,50 @@ async def export_reconstruction(
         rot_mats = ext[:, :, :3]                # (S, 3, 3)
         quats = Rotation.from_matrix(rot_mats).as_quat()  # (S, 4) xyzw
 
-        poses = [
-            {
-                "position": [float(positions[i, 0]), float(positions[i, 1]), float(positions[i, 2])],
-                "quaternion": [float(quats[i, 0]), float(quats[i, 1]), float(quats[i, 2]), float(quats[i, 3])],
+        # FOV from intrinsic: fov_y = 2 * atan(H/2 / fy). Image height comes
+        # from predictions["images"] shape (S, 3, H, W) or (S, H, W, 3).
+        fov_ys: list[float] | None = None
+        try:
+            intr = np.asarray(predictions.get("intrinsic"))
+            imgs = np.asarray(predictions.get("images"))
+            if intr is not None and imgs is not None:
+                if intr.ndim == 4 and intr.shape[0] == 1:
+                    intr = intr[0]
+                # Image height
+                if imgs.ndim == 4 and imgs.shape[1] == 3:
+                    img_h = int(imgs.shape[2])
+                elif imgs.ndim == 4 and imgs.shape[-1] == 3:
+                    img_h = int(imgs.shape[1])
+                else:
+                    img_h = None
+                if intr.ndim == 3 and intr.shape[-2:] == (3, 3) and img_h:
+                    fy = intr[:, 1, 1]
+                    fov_ys = [
+                        float(np.degrees(2 * np.arctan((img_h / 2) / max(1e-6, f))))
+                        for f in fy
+                    ]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("failed to compute per-frame fov: %s", exc)
+
+        poses = []
+        for i in range(positions.shape[0]):
+            pose = {
+                "position": [
+                    float(positions[i, 0]),
+                    float(positions[i, 1]),
+                    float(positions[i, 2]),
+                ],
+                "quaternion": [
+                    float(quats[i, 0]),
+                    float(quats[i, 1]),
+                    float(quats[i, 2]),
+                    float(quats[i, 3]),
+                ],
             }
-            for i in range(positions.shape[0])
-        ]
+            if fov_ys and i < len(fov_ys):
+                pose["fov_y_deg"] = fov_ys[i]
+            poses.append(pose)
+
         out = artifacts_dir / "camera_path.json"
         out.write_text(json.dumps({"fps": float(config.fps), "poses": poses}))
         return out
