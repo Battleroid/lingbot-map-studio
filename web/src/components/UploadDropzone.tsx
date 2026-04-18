@@ -59,20 +59,26 @@ export function UploadDropzone({ files, onChange, disabled }: Props) {
       </div>
       {files.length > 0 && (
         <table className="grid" style={{ marginTop: 10 }}>
+          <colgroup>
+            <col style={{ width: "32px" }} />
+            <col />
+            <col style={{ width: "90px" }} />
+            <col style={{ width: "40px" }} />
+          </colgroup>
           <thead>
             <tr>
-              <th style={{ width: 24 }}>#</th>
+              <th className="num">#</th>
               <th>file</th>
-              <th style={{ width: 100 }}>size</th>
-              <th style={{ width: 30 }}></th>
+              <th className="num">size</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {files.map((f, i) => (
               <tr key={`${f.name}-${i}`}>
-                <td>{i + 1}</td>
-                <td style={{ wordBreak: "break-all" }}>{f.name}</td>
-                <td>{(f.size / 1024 / 1024).toFixed(1)} MB</td>
+                <td className="num">{i + 1}</td>
+                <td className="wrap">{f.name}</td>
+                <td className="num">{(f.size / 1024 / 1024).toFixed(1)} MB</td>
                 <td>
                   <button
                     type="button"

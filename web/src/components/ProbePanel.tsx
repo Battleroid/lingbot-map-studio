@@ -50,33 +50,46 @@ export function ProbePanel({ draft }: { draft: DraftRecord }) {
       </div>
       <div className="panel-body" style={{ padding: 0 }}>
         <table className="grid">
+          <colgroup>
+            <col style={{ width: "36px" }} />
+            <col />
+            <col style={{ width: "80px" }} />
+            <col style={{ width: "100px" }} />
+            <col style={{ width: "72px" }} />
+            <col style={{ width: "60px" }} />
+            <col style={{ width: "64px" }} />
+            <col style={{ width: "84px" }} />
+            <col style={{ width: "84px" }} />
+          </colgroup>
           <thead>
             <tr>
-              <th style={{ width: 28 }}>#</th>
+              <th className="num">#</th>
               <th>file</th>
-              <th>size</th>
+              <th className="num">size</th>
               <th>res</th>
               <th>codec</th>
-              <th>fps</th>
-              <th>dur</th>
-              <th>bitrate</th>
-              <th>frames</th>
+              <th className="num">fps</th>
+              <th className="num">dur</th>
+              <th className="num">bitrate</th>
+              <th className="num">frames</th>
             </tr>
           </thead>
           <tbody>
             {draft.probes.map((p, i) => (
               <tr key={p.name}>
-                <td>{i + 1}</td>
-                <td style={{ wordBreak: "break-all" }}>{p.name}</td>
-                <td>{humanBytes(p.size_bytes)}</td>
+                <td className="num">{i + 1}</td>
+                <td className="wrap">{p.name}</td>
+                <td className="num">{humanBytes(p.size_bytes)}</td>
                 <td>
-                  {p.width && p.height ? `${p.width}x${p.height}` : "—"}
+                  {p.width && p.height ? `${p.width}×${p.height}` : "—"}
                 </td>
                 <td>{p.codec ?? "—"}</td>
-                <td>{human(p.fps, "")}</td>
-                <td>{humanDuration(p.duration_s)}</td>
-                <td>{humanBitrate(p.bitrate)}</td>
-                <td>{p.total_frames?.toLocaleString() ?? "—"}</td>
+                <td className="num">{human(p.fps, "")}</td>
+                <td className="num">{humanDuration(p.duration_s)}</td>
+                <td className="num">{humanBitrate(p.bitrate)}</td>
+                <td className="num">
+                  {p.total_frames?.toLocaleString() ?? "—"}
+                </td>
               </tr>
             ))}
           </tbody>

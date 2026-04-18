@@ -46,12 +46,20 @@ export function JobList() {
         )}
         {data && data.length > 0 && (
           <table className="grid">
+            <colgroup>
+              <col style={{ width: "130px" }} />
+              <col style={{ width: "110px" }} />
+              <col style={{ width: "80px" }} />
+              <col style={{ width: "90px" }} />
+              <col />
+              <col style={{ width: "80px" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>id</th>
                 <th>status</th>
-                <th>frames</th>
-                <th>artifacts</th>
+                <th className="num">frames</th>
+                <th className="num">artifacts</th>
                 <th>created</th>
                 <th></th>
               </tr>
@@ -65,8 +73,8 @@ export function JobList() {
                       {j.status}
                     </span>
                   </td>
-                  <td>{j.frames_total ?? "—"}</td>
-                  <td>{j.artifact_count}</td>
+                  <td className="num">{j.frames_total ?? "—"}</td>
+                  <td className="num">{j.artifact_count}</td>
                   <td className="mono-small">{relTime(j.created_at)}</td>
                   <td>
                     <Link href={`/jobs/${j.id}`}>open</Link>
