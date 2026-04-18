@@ -14,7 +14,7 @@ const config: Config = {
         danger: "var(--danger)",
       },
       fontFamily: {
-        mono: "var(--font-mono)",
+        mono: ["var(--font-mono)"],
       },
       borderRadius: {
         none: "0px",

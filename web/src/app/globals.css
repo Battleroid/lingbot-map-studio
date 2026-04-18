@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Optional Berkeley Mono — drop a licensed woff2 at public/fonts/berkeley-mono.woff2
+   and it will be picked up automatically. Missing file = graceful fallback to Roboto Mono. */
+@font-face {
+  font-family: "Berkeley Mono";
+  src: url("/fonts/berkeley-mono.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+  font-style: normal;
+}
+
 :root {
   --bg: #ffffff;
   --fg: #000000;
@@ -10,6 +20,8 @@
   --rule: #000000;
   --warn: #000000;
   --danger: #8a0000;
+  --font-mono: "Berkeley Mono", var(--font-roboto-mono), "Roboto Mono", ui-monospace,
+    "SFMono-Regular", Consolas, monospace;
 }
 
 html,
