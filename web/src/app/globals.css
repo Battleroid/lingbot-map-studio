@@ -160,23 +160,35 @@ hr,
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Sit above the dithered chrome without picking up its pattern. */
+  z-index: 0;
 }
 
-/* Dithered gray texture — used on side panels and sub-menus to set them apart
-   from white "content" surfaces without losing the high-contrast mono feel.
-   Encoded as an inline SVG data URI so there's no HTTP round-trip. */
+/* Dithered gray texture — classic Mac Finder / Win3.1 50% gray dither.
+   shape-rendering='crispEdges' keeps it pixelated on retina screens instead
+   of being anti-aliased into a flat tone. Encoded as an inline SVG data URI. */
 .dithered {
-  background-color: var(--bg);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' viewBox='0 0 4 4'><rect width='1' height='1' x='0' y='0' fill='black' opacity='0.07'/><rect width='1' height='1' x='2' y='2' fill='black' opacity='0.07'/></svg>");
+  background-color: #e8e8e8;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
+  image-rendering: pixelated;
 }
 
 .dithered-strong {
-  background-color: var(--bg);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='3' height='3' viewBox='0 0 3 3'><rect width='1' height='1' x='0' y='0' fill='black' opacity='0.11'/><rect width='1' height='1' x='2' y='1' fill='black' opacity='0.11'/><rect width='1' height='1' x='1' y='2' fill='black' opacity='0.11'/></svg>");
-  background-size: 3px 3px;
+  background-color: #d8d8d8;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23d8d8d8'/><rect x='0' y='0' width='2' height='2' fill='%23a8a8a8'/><rect x='2' y='2' width='2' height='2' fill='%23a8a8a8'/></svg>");
+  background-size: 4px 4px;
   background-repeat: repeat;
+  image-rendering: pixelated;
+}
+
+.dithered-light {
+  background-color: #f0f0f0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f0f0f0'/><rect x='0' y='0' width='2' height='2' fill='%23d8d8d8'/><rect x='2' y='2' width='2' height='2' fill='%23d8d8d8'/></svg>");
+  background-size: 4px 4px;
+  background-repeat: repeat;
+  image-rendering: pixelated;
 }
 
 .panel-header {
@@ -356,7 +368,7 @@ table.grid {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-sm);
-  table-layout: auto;
+  table-layout: fixed;
   font-variant-numeric: tabular-nums;
 }
 
@@ -507,6 +519,11 @@ table.grid tr:last-child td {
   flex-direction: column;
   padding: 16px;
   gap: 16px;
+  background-color: #e8e8e8;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
+  background-size: 4px 4px;
+  background-repeat: repeat;
+  image-rendering: pixelated;
 }
 
 @media (min-width: 1400px) {
@@ -559,10 +576,11 @@ table.grid tr:last-child td {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  background-color: var(--bg);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' viewBox='0 0 4 4'><rect width='1' height='1' x='0' y='0' fill='black' opacity='0.06'/><rect width='1' height='1' x='2' y='2' fill='black' opacity='0.06'/></svg>");
+  background-color: #e8e8e8;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
+  image-rendering: pixelated;
 }
 
 .job-side.right {
@@ -616,10 +634,11 @@ table.grid tr:last-child td {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-  background-color: var(--bg);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' viewBox='0 0 4 4'><rect width='1' height='1' x='0' y='0' fill='black' opacity='0.05'/><rect width='1' height='1' x='2' y='2' fill='black' opacity='0.05'/></svg>");
+  background-color: #f0f0f0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f0f0f0'/><rect x='0' y='0' width='2' height='2' fill='%23d0d0d0'/><rect x='2' y='2' width='2' height='2' fill='%23d0d0d0'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
+  image-rendering: pixelated;
 }
 
 .status-cell:last-child {
