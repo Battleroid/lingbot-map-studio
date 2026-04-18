@@ -1,0 +1,222 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #ffffff;
+  --fg: #000000;
+  --muted: #6b6b6b;
+  --soft: #f2f2f2;
+  --rule: #000000;
+  --warn: #000000;
+  --danger: #8a0000;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-feature-settings: "ss01", "ss02", "cv02";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--rule);
+  padding: 4px 10px;
+  cursor: pointer;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+button:hover:not(:disabled) {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+button:disabled {
+  color: var(--muted);
+  border-color: var(--muted);
+  cursor: not-allowed;
+}
+
+button[data-pressed="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+input[type="text"],
+input[type="number"],
+input[type="file"],
+select,
+textarea {
+  font: inherit;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--rule);
+  padding: 4px 8px;
+}
+
+input[type="range"] {
+  accent-color: var(--fg);
+}
+
+a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+hr,
+.rule {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 0;
+}
+
+.panel {
+  border: 1px solid var(--rule);
+  background: var(--bg);
+}
+
+.panel-header {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.panel-body {
+  padding: 10px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  text-transform: lowercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.chip[data-status="ready"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.chip[data-status="failed"] {
+  background: var(--danger);
+  color: var(--bg);
+  border-color: var(--danger);
+}
+
+.chip[data-status="inference"],
+.chip[data-status="ingest"],
+.chip[data-status="export"],
+.chip[data-status="queued"] {
+  background: var(--soft);
+}
+
+.log-stream {
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg);
+}
+
+.log-line[data-level="error"] {
+  color: var(--danger);
+}
+
+.log-line[data-level="warn"] {
+  color: var(--fg);
+  background: var(--soft);
+}
+
+.log-line[data-level="stderr"] {
+  color: var(--muted);
+}
+
+.log-line[data-level="stdout"] {
+  color: var(--fg);
+}
+
+.log-line[data-level="info"] {
+  color: var(--fg);
+}
+
+.log-line[data-level="debug"] {
+  color: var(--muted);
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--soft);
+  border: 1px solid var(--rule);
+  position: relative;
+}
+
+.progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--fg);
+  transition: width 160ms linear;
+}
+
+.dropzone {
+  border: 1px dashed var(--rule);
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dropzone[data-active="true"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.stat > span:first-child {
+  color: var(--muted);
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.grid th,
+table.grid td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--rule);
+  font-weight: normal;
+}
+
+table.grid th {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}

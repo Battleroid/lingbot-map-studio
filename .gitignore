@@ -1,0 +1,30 @@
+data/
+models/
+!data/.gitkeep
+!models/.gitkeep
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# node
+node_modules/
+.next/
+out/
+.turbo/
+*.log
+.pnpm-store/
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+
+# local secrets
+.env
+.env.local

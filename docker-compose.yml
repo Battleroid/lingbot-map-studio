@@ -1,0 +1,43 @@
+services:
+  worker:
+    build: ./worker
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      HF_HOME: /models
+      DATA_DIR: /data
+      MODELS_DIR: /models
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      USE_FLASHINFER: ${USE_FLASHINFER:-0}
+    volumes:
+      - ./data:/data
+      - models:/models
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "8gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - worker
+
+volumes:
+  models:
