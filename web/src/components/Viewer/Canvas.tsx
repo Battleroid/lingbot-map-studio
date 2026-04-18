@@ -129,14 +129,36 @@ function FlySpeedModifier({
       shiftHeldRef.current = false;
       apply();
     };
+    // Reset FlyControls' latched drag-to-look state on any window-level
+    // pointerup / pointercancel / blur. three.js FlyControls tracks the
+    // mouse-down count in an internal field; if pointerup happens outside
+    // the canvas (user dragged off-window and released), the canvas' own
+    // listener never fires and the camera keeps following the cursor
+    // forever. Force-resetting here prevents that stuck-drag behavior.
+    const resetDrag = () => {
+      const fc = flyRef.current;
+      if (!fc) return;
+      const internal = fc as unknown as { _mouseStatus?: number; mouseStatus?: number };
+      if (typeof internal._mouseStatus === "number") internal._mouseStatus = 0;
+      if (typeof internal.mouseStatus === "number") internal.mouseStatus = 0;
+    };
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
+    window.addEventListener("pointerup", resetDrag);
+    window.addEventListener("pointercancel", resetDrag);
+    window.addEventListener("blur", resetDrag);
+    document.addEventListener("visibilitychange", resetDrag);
     return () => {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
+      window.removeEventListener("pointerup", resetDrag);
+      window.removeEventListener("pointercancel", resetDrag);
+      window.removeEventListener("blur", resetDrag);
+      document.removeEventListener("visibilitychange", resetDrag);
       shiftHeldRef.current = false;
       const fc = flyRef.current;
       if (fc) fc.movementSpeed = baseSpeed;
+      resetDrag();
     };
   }, [baseSpeed, flyRef]);
   return null;

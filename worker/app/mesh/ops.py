@@ -97,9 +97,10 @@ def _load_point_cloud_ply(path: Path):
 def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
     """Screened-Poisson surface reconstruction on the current point cloud.
 
-    Expects `ms` to have the point cloud loaded as its current mesh. Adds
-    per-point normals, runs Poisson, drops the source cloud, and leaves the
-    reconstructed triangle mesh as the current mesh.
+    Expects `ms` to have the point cloud loaded as its current mesh. Computes
+    per-point normals, runs Poisson, then leaves the triangle-mesh result as
+    the current mesh (the exporter saves current_mesh only, so the source
+    point cloud simply stays in the set unused and gets GC'd).
     """
     depth = int(params.get("depth", 8))
     samples_per_node = float(params.get("samples_per_node", 1.5))
@@ -113,7 +114,6 @@ def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
             k=normal_k, smoothiter=0, flipflag=False, viewpos=[0.0, 0.0, 0.0]
         )
     except Exception:
-        # Older pymeshlab naming
         ms.apply_filter(
             "compute_normal_for_point_clouds",
             k=normal_k,
@@ -121,8 +121,6 @@ def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
             flipflag=False,
             viewpos=[0.0, 0.0, 0.0],
         )
-
-    source_idx = ms.current_mesh_id()
 
     try:
         ms.generate_surface_reconstruction_screened_poisson(
@@ -152,18 +150,33 @@ def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
             preclean=False,
         )
 
-    # The reconstruction filter appended a new mesh. Drop the source point
-    # cloud so the saved output is just the triangle mesh.
-    recon_idx = ms.current_mesh_id()
-    if recon_idx != source_idx:
+    # The reconstruction filter appended a new mesh to the set. Find the
+    # one that actually has faces (there may be several meshes now — the
+    # original cloud with 0 faces plus the Poisson output) and make that
+    # the current mesh so the exporter picks it up.
+    best_id = -1
+    best_faces = 0
+    # mesh_number() gives the count of LIVE meshes; iterate by mesh_id
+    # which can be sparse after deletions (safe for a fresh MeshSet too).
+    try:
+        ids = list(ms.mesh_id_list())
+    except Exception:
+        ids = list(range(ms.mesh_number()))
+    for mid in ids:
         try:
-            ms.set_current_mesh(source_idx)
-            ms.apply_filter("delete_current_mesh")
-            ms.set_current_mesh(recon_idx - 1 if recon_idx > source_idx else recon_idx)
+            ms.set_current_mesh(mid)
+            f = ms.current_mesh().face_number()
+            if f > best_faces:
+                best_faces = f
+                best_id = mid
         except Exception:
-            # If deletion fails we just leave the extra mesh — export still
-            # saves the current mesh only.
-            ms.set_current_mesh(recon_idx)
+            continue
+    if best_id < 0:
+        raise RuntimeError(
+            "Poisson reconstruction produced no triangle mesh — "
+            "try a lower depth, or more points may be needed"
+        )
+    ms.set_current_mesh(best_id)
 
 
 def _run_op(op: str, params: dict[str, Any], ms, face_indices: Optional[list[int]]) -> None:
