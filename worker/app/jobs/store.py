@@ -43,6 +43,13 @@ async def init_store() -> None:
     _Session = async_sessionmaker(_engine, expire_on_commit=False, class_=AsyncSession)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # WAL mode lets readers proceed while a writer is active, dramatically
+        # reduces journal-file FD churn, and is the recommended mode for any
+        # server-style sqlite use. busy_timeout waits up to 5s for locks
+        # rather than erroring instantly.
+        await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await conn.exec_driver_sql("PRAGMA synchronous=NORMAL")
+        await conn.exec_driver_sql("PRAGMA busy_timeout=5000")
 
 
 @asynccontextmanager

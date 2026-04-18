@@ -26,6 +26,12 @@ services:
     ulimits:
       memlock: -1
       stack: 67108864
+      # WSL2 + CUDA leaks dxgresource FDs (one per CUDA op). Default 1024
+      # soft limit is blown by a couple hundred frames of inference, at
+      # which point sqlite EMFILEs and the job silently crashes.
+      nofile:
+        soft: 65536
+        hard: 1048576
 
   web:
     build:
