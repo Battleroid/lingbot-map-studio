@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Literal, Optional
 
 import numpy as np
 
 from app.jobs.schema import JobConfig, JobEvent
+from app.pipeline.progress import capture_stdio
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +100,31 @@ def _export_ply_pointcloud(
     pc.export(str(out))
 
 
+async def _heartbeat(
+    job_id: str,
+    label: str,
+    publish,
+    interval: float = 5.0,
+):
+    """Emit a 'still working' event every `interval` seconds until cancelled.
+
+    Long export sub-steps (sky-segmentation over hundreds of frames, GLB
+    serialization of large scenes) can go quiet for a minute+ which looks
+    like a stall. This keeps the status strip's latest-message fresh.
+    """
+    start = time.monotonic()
+    while True:
+        await asyncio.sleep(interval)
+        elapsed = time.monotonic() - start
+        await publish(
+            JobEvent(
+                job_id=job_id,
+                stage="export",
+                message=f"{label} · still working ({elapsed:.0f}s)",
+            )
+        )
+
+
 async def export_reconstruction(
     job_id: str,
     frames_dir: Path,
@@ -108,14 +135,34 @@ async def export_reconstruction(
 ) -> dict[str, Path]:
     """Produce the initial artifacts for a completed inference run:
     GLB (textured points + camera glyphs), PLY (colored points only).
+
+    Each long sub-step runs under capture_stdio so lingbot-map's internal
+    tqdm progress flows into the event stream, and under a heartbeat task
+    so the UI sees 'still working' ticks even when sub-steps are quiet.
     """
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    loop = asyncio.get_running_loop()
+
+    async def _run_stage(label: str, fn):
+        await publish(JobEvent(job_id=job_id, stage="export", message=label))
+        hb = asyncio.create_task(_heartbeat(job_id, label, publish))
+        try:
+            def _wrapped():
+                with capture_stdio(job_id, publish, "export", loop):
+                    return fn()
+            return await asyncio.to_thread(_wrapped)
+        finally:
+            hb.cancel()
+            try:
+                await hb
+            except asyncio.CancelledError:
+                pass
 
     if config.mask_sky:
-        await publish(
-            JobEvent(job_id=job_id, stage="export", message="applying sky segmentation...")
+        await _run_stage(
+            "applying sky segmentation",
+            lambda: _apply_sky_mask_to_predictions(predictions, frames_dir),
         )
-        await asyncio.to_thread(_apply_sky_mask_to_predictions, predictions, frames_dir)
 
     def _build_glb() -> Path:
         scene = _scene_from_predictions(predictions, config)
@@ -128,11 +175,8 @@ async def export_reconstruction(
         _export_ply_pointcloud(predictions, config, path, conf_percentile=None)
         return path
 
-    await publish(JobEvent(job_id=job_id, stage="export", message="writing GLB..."))
-    glb_path = await asyncio.to_thread(_build_glb)
-
-    await publish(JobEvent(job_id=job_id, stage="export", message="writing PLY..."))
-    ply_path = await asyncio.to_thread(_build_ply)
+    glb_path = await _run_stage("writing GLB", _build_glb)
+    ply_path = await _run_stage("writing PLY", _build_ply)
 
     await publish(
         JobEvent(

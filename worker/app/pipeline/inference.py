@@ -57,6 +57,12 @@ def _build_model(config: JobConfig):
 
 
 def _postprocess(predictions: dict, image_shape) -> dict:
+    """Convert pose_enc → extrinsic (c2w, 3×4) + intrinsic (3×3), squeeze
+    batch dim, move to numpy.
+
+    closed_form_inverse_se3_general returns 4×4 homogeneous matrices, but
+    predictions_to_glb expects 3×4 (R|t) — matching demo.py's postprocess.
+    """
     import torch
 
     from lingbot_map.utils.geometry import closed_form_inverse_se3_general
@@ -64,7 +70,8 @@ def _postprocess(predictions: dict, image_shape) -> dict:
 
     pose_enc = predictions["pose_enc"]
     extrinsic_w2c, intrinsic = pose_encoding_to_extri_intri(pose_enc, image_shape[-2:])
-    extrinsic_c2w = closed_form_inverse_se3_general(extrinsic_w2c)
+    extrinsic_c2w_h = closed_form_inverse_se3_general(extrinsic_w2c)   # (B, S, 4, 4)
+    extrinsic_c2w = extrinsic_c2w_h[..., :3, :]                         # (B, S, 3, 4)
     predictions["extrinsic"] = extrinsic_c2w
     predictions["intrinsic"] = intrinsic
 
@@ -72,7 +79,10 @@ def _postprocess(predictions: dict, image_shape) -> dict:
     for k, v in predictions.items():
         if isinstance(v, torch.Tensor):
             arr = v.detach().to("cpu")
-            while arr.ndim > 3 and arr.shape[0] == 1 and k not in ("extrinsic", "intrinsic"):
+            # Squeeze leading batch dim for ALL tensors (including extrinsic /
+            # intrinsic — previously excluded, which left them in (1, S, 3, 4)
+            # form and broke predictions_to_glb).
+            while arr.ndim > 2 and arr.shape[0] == 1:
                 arr = arr.squeeze(0)
             out[k] = arr.float().numpy() if arr.is_floating_point() else arr.numpy()
         else:
