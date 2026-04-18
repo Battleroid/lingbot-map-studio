@@ -128,7 +128,8 @@ export type MeshOp =
   | "fill_holes"
   | "decimate"
   | "smooth"
-  | "remove_small";
+  | "remove_small"
+  | "surface_recon";
 
 export interface MeshEditRequest {
   op: MeshOp;

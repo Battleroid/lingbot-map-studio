@@ -126,7 +126,14 @@ class JobSummary(BaseModel):
 
 
 class MeshEditRequest(BaseModel):
-    op: Literal["cull", "fill_holes", "decimate", "smooth", "remove_small"]
+    op: Literal[
+        "cull",
+        "fill_holes",
+        "decimate",
+        "smooth",
+        "remove_small",
+        "surface_recon",
+    ]
     params: dict[str, Any] = Field(default_factory=dict)
     face_indices: Optional[list[int]] = None
     source_revision: Optional[int] = None  # default = latest

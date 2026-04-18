@@ -22,6 +22,8 @@ const TIPS: Record<MeshOp, string> = {
     "Laplacian smoothing, N iterations. Use to soften noisy point-map reconstructions; too many iterations shrinks detail.",
   remove_small:
     "Delete disconnected components smaller than N% of the mesh. Good for ripping out floating fragments.",
+  surface_recon:
+    "Screened-Poisson surface reconstruction: turns the raw point cloud into an actual triangle mesh so wireframe / fill-holes / decimate operate on real geometry. Depth controls detail — 7 is fast and coarse, 9 is slow but detailed, 8 is a good default. Uses reconstruction.ply (not the current revision) as input.",
 };
 
 /** Extract the numeric revision from `rev_003.glb` → 3. */
@@ -42,6 +44,7 @@ export function MeshTools({ jobId, onRevision }: Props) {
   const [smoothIters, setSmoothIters] = useState(3);
   const [holeSize, setHoleSize] = useState(30);
   const [smallPct, setSmallPct] = useState(5);
+  const [reconDepth, setReconDepth] = useState(8);
 
   // If the user has undone past some revisions, branch from the currently
   // visible revision (server supports this via `source_revision`).
@@ -166,6 +169,41 @@ export function MeshTools({ jobId, onRevision }: Props) {
         >
           {busy === "remove_small" ? "removing..." : "remove small"}
         </button>
+
+        <div
+          style={{
+            marginTop: 6,
+            paddingTop: 6,
+            borderTop: "1px solid var(--rule)",
+          }}
+        >
+          <div className="section-title">surface reconstruction</div>
+        </div>
+        <label className="stat">
+          <Tip text={TIPS.surface_recon}>
+            <span>poisson depth</span>
+          </Tip>
+          <input
+            type="number"
+            min={5}
+            max={11}
+            step={1}
+            value={reconDepth}
+            onChange={(e) => setReconDepth(Number(e.target.value))}
+          />
+        </label>
+        <Tip text={TIPS.surface_recon} showIcon={false}>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => run("surface_recon", { depth: reconDepth })}
+            style={{ width: "100%" }}
+          >
+            {busy === "surface_recon"
+              ? "reconstructing..."
+              : "reconstruct surface from point cloud"}
+          </button>
+        </Tip>
 
         {error && (
           <div style={{ color: "var(--danger)", fontSize: "var(--fs-xs)" }}>{error}</div>

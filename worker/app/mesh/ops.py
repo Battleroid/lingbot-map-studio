@@ -83,6 +83,89 @@ def _export_glb(ms, out: Path) -> None:
     scene.export(str(out))
 
 
+def _load_point_cloud_ply(path: Path):
+    """Load a PLY point cloud into a pymeshlab MeshSet (no face data)."""
+    import pymeshlab
+
+    if not path.exists():
+        raise FileNotFoundError(f"point cloud missing: {path}")
+    ms = pymeshlab.MeshSet()
+    ms.load_new_mesh(str(path))
+    return ms
+
+
+def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
+    """Screened-Poisson surface reconstruction on the current point cloud.
+
+    Expects `ms` to have the point cloud loaded as its current mesh. Adds
+    per-point normals, runs Poisson, drops the source cloud, and leaves the
+    reconstructed triangle mesh as the current mesh.
+    """
+    depth = int(params.get("depth", 8))
+    samples_per_node = float(params.get("samples_per_node", 1.5))
+    point_weight = float(params.get("point_weight", 4.0))
+    normal_k = int(params.get("normal_k", 10))
+
+    # Normals first — Poisson requires them and raw point clouds usually
+    # don't carry normals.
+    try:
+        ms.compute_normal_for_point_clouds(
+            k=normal_k, smoothiter=0, flipflag=False, viewpos=[0.0, 0.0, 0.0]
+        )
+    except Exception:
+        # Older pymeshlab naming
+        ms.apply_filter(
+            "compute_normal_for_point_clouds",
+            k=normal_k,
+            smoothiter=0,
+            flipflag=False,
+            viewpos=[0.0, 0.0, 0.0],
+        )
+
+    source_idx = ms.current_mesh_id()
+
+    try:
+        ms.generate_surface_reconstruction_screened_poisson(
+            visiblelayer=False,
+            depth=depth,
+            fulldepth=max(1, depth - 3),
+            cgdepth=0,
+            scale=1.1,
+            samplespernode=samples_per_node,
+            pointweight=point_weight,
+            iters=8,
+            confidence=False,
+            preclean=False,
+        )
+    except Exception:
+        ms.apply_filter(
+            "generate_surface_reconstruction_screened_poisson",
+            visiblelayer=False,
+            depth=depth,
+            fulldepth=max(1, depth - 3),
+            cgdepth=0,
+            scale=1.1,
+            samplespernode=samples_per_node,
+            pointweight=point_weight,
+            iters=8,
+            confidence=False,
+            preclean=False,
+        )
+
+    # The reconstruction filter appended a new mesh. Drop the source point
+    # cloud so the saved output is just the triangle mesh.
+    recon_idx = ms.current_mesh_id()
+    if recon_idx != source_idx:
+        try:
+            ms.set_current_mesh(source_idx)
+            ms.apply_filter("delete_current_mesh")
+            ms.set_current_mesh(recon_idx - 1 if recon_idx > source_idx else recon_idx)
+        except Exception:
+            # If deletion fails we just leave the extra mesh — export still
+            # saves the current mesh only.
+            ms.set_current_mesh(recon_idx)
+
+
 def _run_op(op: str, params: dict[str, Any], ms, face_indices: Optional[list[int]]) -> None:
     import pymeshlab
 
@@ -124,6 +207,8 @@ def _run_op(op: str, params: dict[str, Any], ms, face_indices: Optional[list[int
             nbfaceratio=min_diag_perc / 100.0,
         )
         ms.apply_filter("meshing_remove_selected_vertices_and_faces")
+    elif op == "surface_recon":
+        _surface_reconstruct(ms, params)
     else:
         raise ValueError(f"Unknown op: {op}")
 
@@ -137,16 +222,30 @@ def apply_op(
 ) -> tuple[Path, int]:
     """Run a mesh op against the latest (or specified) revision, write a new
     revision file, and return (path, revision).
-    """
-    if source_revision is None:
-        source = latest_revision_path(artifacts_dir)
-    else:
-        source = revision_path(artifacts_dir, source_revision)
-    if source is None or not source.exists():
-        raise FileNotFoundError("No mesh revision to edit")
 
-    ms = _load_mesh_from_glb(source)
-    _run_op(op, params or {}, ms, face_indices)
+    `surface_recon` is special-cased: it reconstructs from the raw point
+    cloud (reconstruction.ply) instead of a prior revision, since the GLB
+    scenes from predictions_to_glb only contain camera frustum triangles,
+    not the scene points.
+    """
+    if op == "surface_recon":
+        ply_path = artifacts_dir / "reconstruction.ply"
+        if not ply_path.exists():
+            raise FileNotFoundError(
+                "surface_recon needs reconstruction.ply — run an export first"
+            )
+        ms = _load_point_cloud_ply(ply_path)
+        _run_op(op, params or {}, ms, face_indices)
+    else:
+        if source_revision is None:
+            source = latest_revision_path(artifacts_dir)
+        else:
+            source = revision_path(artifacts_dir, source_revision)
+        if source is None or not source.exists():
+            raise FileNotFoundError("No mesh revision to edit")
+
+        ms = _load_mesh_from_glb(source)
+        _run_op(op, params or {}, ms, face_indices)
 
     rev = next_revision(artifacts_dir)
     out = revision_path(artifacts_dir, rev)
