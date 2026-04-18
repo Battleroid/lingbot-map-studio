@@ -21,6 +21,8 @@ const MODES: { value: RenderMode; label: string; tip: string }[] = [
 export function ViewerControls() {
   const mode = useViewerStore((s) => s.mode);
   const setMode = useViewerStore((s) => s.setMode);
+  const cameraMode = useViewerStore((s) => s.cameraMode);
+  const setCameraMode = useViewerStore((s) => s.setCameraMode);
   const pointSizeScale = useViewerStore((s) => s.pointSizeScale);
   const setPointSizeScale = useViewerStore((s) => s.setPointSizeScale);
   const lassoActive = useViewerStore((s) => s.lassoActive);
@@ -28,6 +30,13 @@ export function ViewerControls() {
   const selection = useViewerStore((s) => s.selection);
   const clearSelection = useViewerStore((s) => s.clearSelection);
   const requestRefit = useViewerStore((s) => s.requestRefit);
+  const meshHistory = useViewerStore((s) => s.meshHistory);
+  const meshHistoryIndex = useViewerStore((s) => s.meshHistoryIndex);
+  const undo = useViewerStore((s) => s.undo);
+  const redo = useViewerStore((s) => s.redo);
+
+  const canUndo = meshHistoryIndex >= 0;
+  const canRedo = meshHistoryIndex < meshHistory.length - 1;
 
   return (
     <div
@@ -89,6 +98,54 @@ export function ViewerControls() {
           alignItems: "center",
         }}
       >
+        <Tip
+          text={
+            canUndo
+              ? `Undo back to ${meshHistoryIndex === 0 ? "base reconstruction" : `rev ${meshHistory[meshHistoryIndex - 1]?.revision}`}.`
+              : "Nothing to undo — you're on the base reconstruction."
+          }
+          showIcon={false}
+        >
+          <button
+            type="button"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo last mesh edit"
+          >
+            ↶ undo
+          </button>
+        </Tip>
+        <Tip
+          text={
+            canRedo
+              ? `Redo forward to rev ${meshHistory[meshHistoryIndex + 1]?.revision}.`
+              : "Nothing to redo — you're at the latest edit."
+          }
+          showIcon={false}
+        >
+          <button
+            type="button"
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo next mesh edit"
+          >
+            ↷ redo
+          </button>
+        </Tip>
+        <Tip
+          text="Orbit: click-drag rotates around a pivot; scroll zooms. Fly: WASD translates, mouse-drag looks around, Q/E roll."
+          showIcon={false}
+        >
+          <button
+            type="button"
+            data-pressed={cameraMode === "fly"}
+            onClick={() =>
+              setCameraMode(cameraMode === "orbit" ? "fly" : "orbit")
+            }
+          >
+            {cameraMode === "fly" ? "fly" : "orbit"}
+          </button>
+        </Tip>
         <Tip
           text="Reframe the camera on the current geometry. Use when the reconstruction drifts out of view or after lassoing / editing."
           showIcon={false}

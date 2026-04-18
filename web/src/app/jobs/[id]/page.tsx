@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 
 import { ConfigPanel } from "@/components/ConfigPanel";
 import { ExportMenu } from "@/components/ExportMenu";
@@ -14,6 +14,7 @@ import { useJobManifest } from "@/hooks/useJob";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { useJobStream } from "@/hooks/useJobStream";
 import { artifactUrl, restartJob, stopJob } from "@/lib/api";
+import { useViewerStore } from "@/lib/viewerStore";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -29,6 +30,15 @@ export default function JobPage({ params }: Props) {
   const derived = useJobStatus(events, manifest?.status);
   const [meshOverride, setMeshOverride] = useState<string | null>(null);
   const [busy, setBusy] = useState<"stop" | "restart" | null>(null);
+
+  // Mesh edit history — reset when navigating between jobs so the undo stack
+  // doesn't bleed across.
+  const meshHistory = useViewerStore((s) => s.meshHistory);
+  const meshHistoryIndex = useViewerStore((s) => s.meshHistoryIndex);
+  const resetMeshHistory = useViewerStore((s) => s.resetHistory);
+  useEffect(() => {
+    resetMeshHistory();
+  }, [id, resetMeshHistory]);
   const [stopRequestedAt, setStopRequestedAt] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -70,7 +80,14 @@ export default function JobPage({ params }: Props) {
     }
   }
 
-  const activeMeshName = meshOverride || manifest?.latest_mesh || null;
+  // Active mesh priority:
+  //   1. explicit override (e.g. Export Menu's re-export picks a specific GLB)
+  //   2. undo/redo pointer position (history-driven edits)
+  //   3. most recent GLB on disk (manifest.latest_mesh — the server's view)
+  const historyMesh =
+    meshHistoryIndex >= 0 ? meshHistory[meshHistoryIndex]?.name : null;
+  const activeMeshName =
+    meshOverride || historyMesh || manifest?.latest_mesh || null;
 
   // Find the latest partial PLY emitted during inference (live preview) so we
   // can swap the viewer's point cloud URL as the reconstruction grows. A

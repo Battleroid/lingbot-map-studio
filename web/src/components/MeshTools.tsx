@@ -24,9 +24,18 @@ const TIPS: Record<MeshOp, string> = {
     "Delete disconnected components smaller than N% of the mesh. Good for ripping out floating fragments.",
 };
 
+/** Extract the numeric revision from `rev_003.glb` → 3. */
+function parseRev(name: string): number {
+  const m = /^rev_0*(\d+)\.glb$/.exec(name);
+  return m ? Number(m[1]) : 0;
+}
+
 export function MeshTools({ jobId, onRevision }: Props) {
   const selection = useViewerStore((s) => s.selection);
   const clearSelection = useViewerStore((s) => s.clearSelection);
+  const meshHistory = useViewerStore((s) => s.meshHistory);
+  const meshHistoryIndex = useViewerStore((s) => s.meshHistoryIndex);
+  const pushRevision = useViewerStore((s) => s.pushRevision);
   const [busy, setBusy] = useState<MeshOp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [decimateRatio, setDecimateRatio] = useState(0.5);
@@ -34,11 +43,22 @@ export function MeshTools({ jobId, onRevision }: Props) {
   const [holeSize, setHoleSize] = useState(30);
   const [smallPct, setSmallPct] = useState(5);
 
+  // If the user has undone past some revisions, branch from the currently
+  // visible revision (server supports this via `source_revision`).
+  const currentRev =
+    meshHistoryIndex >= 0 ? meshHistory[meshHistoryIndex] : null;
+
   async function run(op: MeshOp, params: Record<string, unknown>, faces?: number[]) {
     setBusy(op);
     setError(null);
     try {
-      const res = await meshEdit(jobId, { op, params, face_indices: faces });
+      const res = await meshEdit(jobId, {
+        op,
+        params,
+        face_indices: faces,
+        source_revision: currentRev?.revision,
+      });
+      pushRevision({ name: res.name, revision: parseRev(res.name), op });
       onRevision(res.name);
       clearSelection();
     } catch (e) {

@@ -1,7 +1,13 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { Bounds, Grid, OrbitControls, useBounds } from "@react-three/drei";
+import {
+  Bounds,
+  FlyControls,
+  Grid,
+  OrbitControls,
+  useBounds,
+} from "@react-three/drei";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
@@ -55,6 +61,7 @@ function RefitController() {
 
 export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
   const mode = useViewerStore((s) => s.mode);
+  const cameraMode = useViewerStore((s) => s.cameraMode);
   const lassoActive = useViewerStore((s) => s.lassoActive);
   const controls = useRef<OrbitControlsImpl>(null);
 
@@ -94,14 +101,40 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
           </Bounds>
           {showMesh && glbUrl && lassoActive && <LassoSelect />}
         </Suspense>
-        <OrbitControls
-          ref={controls}
-          enabled={!lassoActive}
-          makeDefault
-          enableDamping
-          dampingFactor={0.08}
-        />
+        {cameraMode === "orbit" ? (
+          <OrbitControls
+            ref={controls}
+            enabled={!lassoActive}
+            makeDefault
+            enableDamping
+            dampingFactor={0.08}
+          />
+        ) : (
+          <FlyControls
+            makeDefault
+            movementSpeed={2}
+            rollSpeed={0.6}
+            dragToLook
+          />
+        )}
       </Canvas>
+      {cameraMode === "fly" && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 10,
+            left: 10,
+            padding: "4px 8px",
+            background: "var(--fg)",
+            color: "var(--bg)",
+            fontSize: "var(--fs-xs)",
+            letterSpacing: "0.06em",
+            pointerEvents: "none",
+          }}
+        >
+          fly · WASD move · drag to look · R/F up/down · Q/E roll
+        </div>
+      )}
       {!glbUrl && !plyUrl && (
         <div
           style={{
