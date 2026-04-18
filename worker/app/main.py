@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
+from app.jobs import cancel as cancel_mod
 from app.jobs import drafts, runner, store
 from app.jobs.events import bus
 from app.jobs.schema import (
@@ -404,6 +405,77 @@ async def delete_job(job_id: str) -> dict[str, Any]:
     if job_dir.exists():
         shutil.rmtree(job_dir, ignore_errors=True)
     return {"deleted": True}
+
+
+@app.post("/api/jobs/{job_id}/stop")
+async def stop_job(job_id: str) -> dict[str, Any]:
+    """Request cancellation of a running job.
+
+    Flips a shared flag that the inference hook + ingest/export checkpoints
+    watch for. The job will unwind cleanly and land in status=cancelled.
+    """
+    job = await store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status in {"ready", "failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="job already finished")
+    ok = cancel_mod.cancel(job_id, "stopped by user")
+    if not ok:
+        # Token vanished (e.g. job just finished between status read and now).
+        raise HTTPException(status_code=409, detail="job not active")
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="system",
+            level="warn",
+            message="stop requested — unwinding current stage...",
+        )
+    )
+    return {"cancelled": True}
+
+
+@app.post("/api/jobs/{job_id}/restart", status_code=201)
+async def restart_job(job_id: str) -> dict[str, str]:
+    """Clone this job's config + uploads into a fresh job and start it.
+
+    Keeps the original job + artifacts untouched. Useful for retrying after a
+    cancellation, a failure, or just to re-run with a tweaked config (though
+    for config changes the `/api/drafts` flow is better since it lets you
+    re-probe metadata)."""
+    old = await store.get_job(job_id)
+    if old is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    new_id = new_job_id()
+    new_uploads_dir = settings.job_uploads(new_id)
+    new_uploads_dir.mkdir(parents=True, exist_ok=True)
+    old_uploads_dir = settings.job_uploads(job_id)
+
+    saved_paths: list[Path] = []
+    saved_names: list[str] = []
+    for name in old.uploads:
+        src = old_uploads_dir / name
+        if not src.exists():
+            raise HTTPException(
+                status_code=409,
+                detail=f"source upload {name} missing — can't restart",
+            )
+        dst = new_uploads_dir / name
+        shutil.copy2(src, dst)
+        saved_paths.append(dst)
+        saved_names.append(name)
+
+    from app.jobs.schema import Job as JobModel
+
+    new_job_obj = JobModel(
+        id=new_id,
+        status="queued",
+        config=old.config,
+        uploads=saved_names,
+    )
+    await store.create_job(new_job_obj)
+    asyncio.create_task(runner.run_job(new_id, saved_paths, old.config))
+    return {"id": new_id}
 
 
 @app.get("/api/jobs/{job_id}/artifacts/{name}")

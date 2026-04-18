@@ -254,6 +254,11 @@ hr,
   background: var(--soft);
 }
 
+.chip[data-status="cancelled"] {
+  background: #e6e6e6;
+  color: var(--fg);
+}
+
 /* Stat rows — config fields and metrics */
 .stat {
   display: flex;
@@ -715,7 +720,7 @@ table.dtable tr:last-child td {
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 0;
   /* Hard cap so the viewer below never reflows on new log text. */
-  height: 140px;
+  height: 170px;
   flex-shrink: 0;
 }
 
@@ -755,17 +760,104 @@ table.dtable tr:last-child td {
   min-width: 0;
 }
 
-.stage-row {
+/* Vertical stage list — replaces the old horizontal pill row. */
+.stage-list {
   display: flex;
-  gap: 4px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  /* Hide webkit scrollbar so the row doesn't reserve space for one. */
-  scrollbar-width: none;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.stage-row::-webkit-scrollbar {
-  display: none;
+.stage-line {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 2px;
+  color: var(--muted);
+  border-left: 2px solid transparent;
+  padding-left: 4px;
+}
+
+.stage-line[data-state="active"] {
+  color: var(--fg);
+  border-left-color: var(--fg);
+  background: #ffffff;
+  animation: stage-line-pulse 1.4s ease-in-out infinite;
+}
+
+.stage-line[data-state="done"] {
+  color: var(--fg);
+}
+
+.stage-line[data-state="failed"] {
+  color: var(--danger);
+  border-left-color: var(--danger);
+  background: rgba(138, 0, 0, 0.08);
+}
+
+.stage-line .sl-glyph {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.stage-line[data-state="active"] .sl-glyph::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--fg);
+  border-radius: 50%;
+  animation: dot-blink 0.85s infinite step-end;
+}
+
+.stage-line[data-state="done"] .sl-glyph::before {
+  content: "✓";
+}
+
+.stage-line[data-state="failed"] .sl-glyph::before {
+  content: "✕";
+}
+
+.stage-line[data-state="pending"] .sl-glyph::before {
+  content: "·";
+}
+
+.stage-line .sl-name {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-line .sl-meta {
+  white-space: nowrap;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.stage-line[data-state="active"] .sl-meta {
+  color: var(--fg);
+  opacity: 1;
+}
+
+@keyframes stage-line-pulse {
+  0%,
+  100% {
+    background: #ffffff;
+  }
+  50% {
+    background: #f5f5f5;
+  }
 }
 
 .status-cell:last-child {

@@ -21,20 +21,24 @@ function formatDuration(seconds: number | null | undefined): string {
   return s === 0 ? `${m}m` : `${m}m ${s}s`;
 }
 
-function StagePill({ stage }: { stage: StageState }) {
+function StageLine({ stage }: { stage: StageState }) {
+  let meta = "—";
+  if (stage.state === "active") {
+    meta =
+      stage.latest_progress !== null
+        ? `${Math.round(stage.latest_progress * 100)}%`
+        : "…";
+  } else if (stage.state === "done" || stage.state === "failed") {
+    meta =
+      stage.duration_s !== null ? formatDuration(stage.duration_s) : "—";
+  } else {
+    meta = "pending";
+  }
   return (
-    <div className="stage-pill" data-state={stage.state}>
-      <span className="stage-glyph" />
-      <span className="stage-name">{stage.name}</span>
-      {(stage.state === "done" || stage.state === "failed") &&
-        stage.duration_s !== null && (
-          <span className="stage-dur">{formatDuration(stage.duration_s)}</span>
-        )}
-      {stage.state === "active" && stage.latest_progress !== null && (
-        <span className="stage-dur">
-          {Math.round(stage.latest_progress * 100)}%
-        </span>
-      )}
+    <div className="stage-line" data-state={stage.state}>
+      <span className="sl-glyph" />
+      <span className="sl-name">{stage.name}</span>
+      <span className="sl-meta">{meta}</span>
     </div>
   );
 }
@@ -141,6 +145,9 @@ function VramCell({ derived }: { derived: JobStatusDerived }) {
 }
 
 function StagesCell({ derived, wsStatus }: { derived: JobStatusDerived; wsStatus: string }) {
+  const activeMsg = derived.activeStage
+    ? derived.stages.find((s) => s.name === derived.activeStage)?.latest_message ?? ""
+    : "";
   return (
     <div className="status-cell">
       <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -156,21 +163,14 @@ function StagesCell({ derived, wsStatus }: { derived: JobStatusDerived; wsStatus
           </span>
         </span>
       </div>
-      <div className="stage-row">
+      <div className="stage-list">
         {derived.stages.map((s) => (
-          <StagePill key={s.name} stage={s} />
+          <StageLine key={s.name} stage={s} />
         ))}
       </div>
-      {derived.activeStage && (
-        <div
-          className="latest-msg"
-          title={
-            derived.stages.find((s) => s.name === derived.activeStage)
-              ?.latest_message || ""
-          }
-        >
-          {derived.stages.find((s) => s.name === derived.activeStage)
-            ?.latest_message || "—"}
+      {activeMsg && (
+        <div className="latest-msg" title={activeMsg}>
+          {activeMsg}
         </div>
       )}
     </div>

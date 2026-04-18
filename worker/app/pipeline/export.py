@@ -178,6 +178,26 @@ async def export_reconstruction(
     glb_path = await _run_stage("writing GLB", _build_glb)
     ply_path = await _run_stage("writing PLY", _build_ply)
 
+    # Clean up live-preview partial PLYs now that the real reconstruction is
+    # in place. Also drop their artifact events from the client's mental model
+    # by emitting a "partial_cleanup" event the frontend can act on.
+    removed: list[str] = []
+    for p in artifacts_dir.glob("partial_*.ply"):
+        try:
+            p.unlink()
+            removed.append(p.name)
+        except OSError:
+            pass
+    if removed:
+        await publish(
+            JobEvent(
+                job_id=job_id,
+                stage="artifact",
+                message=f"cleaned up {len(removed)} partial snapshot(s)",
+                data={"kind": "partial_cleanup", "removed": removed},
+            )
+        )
+
     await publish(
         JobEvent(
             job_id=job_id,

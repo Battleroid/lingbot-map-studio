@@ -4,7 +4,8 @@ export type JobStatus =
   | "inference"
   | "export"
   | "ready"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type EventLevel =
   | "info"

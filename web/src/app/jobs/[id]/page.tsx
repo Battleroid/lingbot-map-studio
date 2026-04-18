@@ -13,29 +13,73 @@ import { ViewerControls } from "@/components/Viewer/ViewerControls";
 import { useJobManifest } from "@/hooks/useJob";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { useJobStream } from "@/hooks/useJobStream";
-import { artifactUrl } from "@/lib/api";
+import { artifactUrl, restartJob, stopJob } from "@/lib/api";
 
 interface Props {
   params: Promise<{ id: string }>;
 }
 
+import { useRouter } from "next/navigation";
+
 export default function JobPage({ params }: Props) {
   const { id } = use(params);
+  const router = useRouter();
   const { data: manifest } = useJobManifest(id);
   const { events, status } = useJobStream(id);
   const derived = useJobStatus(events, manifest?.status);
   const [meshOverride, setMeshOverride] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"stop" | "restart" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const jobStatus = manifest?.status;
+  const isRunning =
+    jobStatus === "queued" ||
+    jobStatus === "ingest" ||
+    jobStatus === "inference" ||
+    jobStatus === "export";
+  const isTerminal =
+    jobStatus === "ready" || jobStatus === "failed" || jobStatus === "cancelled";
+
+  async function onStop() {
+    setBusy("stop");
+    setActionError(null);
+    try {
+      await stopJob(id);
+    } catch (e) {
+      setActionError(String((e as Error).message));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRestart() {
+    setBusy("restart");
+    setActionError(null);
+    try {
+      const { id: newId } = await restartJob(id);
+      router.push(`/jobs/${newId}`);
+    } catch (e) {
+      setActionError(String((e as Error).message));
+      setBusy(null);
+    }
+  }
 
   const activeMeshName = meshOverride || manifest?.latest_mesh || null;
 
   // Find the latest partial PLY emitted during inference (live preview) so we
-  // can swap the viewer's point cloud URL as the reconstruction grows.
+  // can swap the viewer's point cloud URL as the reconstruction grows. A
+  // partial_cleanup event from the worker clears this so we don't try to
+  // fetch a 404'd URL after export deletes the snapshots.
   const latestPartialPly = useMemo(() => {
     let latest: string | null = null;
     for (const ev of events) {
-      if (ev.stage === "artifact" && ev.data?.["kind"] === "partial_ply") {
+      if (ev.stage !== "artifact") continue;
+      const kind = ev.data?.["kind"];
+      if (kind === "partial_ply") {
         const name = ev.data?.["name"];
         if (typeof name === "string") latest = name;
+      } else if (kind === "partial_cleanup") {
+        latest = null;
       }
     }
     return latest;
@@ -67,6 +111,31 @@ export default function JobPage({ params }: Props) {
           <span className="chip" data-status={manifest?.status ?? "queued"}>
             {manifest?.status ?? "queued"}
           </span>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {actionError && (
+            <span className="mono-small" style={{ color: "var(--danger)" }}>
+              {actionError}
+            </span>
+          )}
+          {isRunning && (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={onStop}
+            >
+              {busy === "stop" ? "stopping…" : "stop"}
+            </button>
+          )}
+          {isTerminal && manifest && (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={onRestart}
+            >
+              {busy === "restart" ? "restarting…" : "restart"}
+            </button>
+          )}
         </div>
       </header>
 

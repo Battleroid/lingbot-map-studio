@@ -1,7 +1,7 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { Grid, OrbitControls } from "@react-three/drei";
+import { Bounds, Grid, OrbitControls } from "@react-three/drei";
 import { Suspense, useMemo, useRef } from "react";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
@@ -39,8 +39,12 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
   const showPoints = mode === "points" || mode === "points-color";
   const showMesh = mode === "mesh" || mode === "wireframe";
 
+  // Bounds keys include the active URL so that when a new partial PLY lands,
+  // Bounds remounts and refits the camera to the new geometry.
+  const boundsKey = `${showMesh ? glbUrl ?? "" : ""}|${showPoints ? plyUrl ?? "" : ""}|${mode}`;
+
   const cameraProps = useMemo(
-    () => ({ position: [2.5, 2.5, 2.5] as [number, number, number], fov: 45 }),
+    () => ({ position: [2.5, 2.5, 2.5] as [number, number, number], fov: 45, near: 0.01, far: 5000 }),
     [],
   );
 
@@ -52,13 +56,23 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
         <directionalLight position={[5, 8, 3]} intensity={0.9} />
         <Suspense fallback={null}>
           <AxesAndGrid />
-          {showMesh && glbUrl && <MeshLayer url={glbUrl} wireframe={mode === "wireframe"} />}
-          {showPoints && plyUrl && (
-            <PointCloud url={plyUrl} color={mode === "points-color"} />
-          )}
+          <Bounds key={boundsKey} fit clip observe margin={1.3}>
+            {showMesh && glbUrl && (
+              <MeshLayer url={glbUrl} wireframe={mode === "wireframe"} />
+            )}
+            {showPoints && plyUrl && (
+              <PointCloud url={plyUrl} color={mode === "points-color"} />
+            )}
+          </Bounds>
           {showMesh && glbUrl && lassoActive && <LassoSelect />}
         </Suspense>
-        <OrbitControls ref={controls} enabled={!lassoActive} makeDefault />
+        <OrbitControls
+          ref={controls}
+          enabled={!lassoActive}
+          makeDefault
+          enableDamping
+          dampingFactor={0.08}
+        />
       </Canvas>
       {!glbUrl && !plyUrl && (
         <div
@@ -74,7 +88,7 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
             pointerEvents: "none",
           }}
         >
-          waiting for reconstruction...
+          waiting for reconstruction…
         </div>
       )}
     </div>

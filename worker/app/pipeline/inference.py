@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from app.jobs.cancel import CancelToken, JobCancelled
 from app.jobs.schema import JobConfig, JobEvent
 from app.pipeline.progress import capture_stdio
 from app.pipeline.watchdog import VramLimitExceeded, VramWatchState
@@ -143,6 +144,7 @@ def _run_inference_sync(
     partial_cb: Callable[[int, Path, int], None] | None,
     artifacts_dir: Path,
     vram_state: VramWatchState | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> tuple[dict, tuple[int, ...]]:
     """Synchronous GPU inference. Runs in a worker thread.
 
@@ -231,6 +233,8 @@ def _run_inference_sync(
         threading.Thread(target=_worker, daemon=True, name=f"snap-{frames_done}").start()
 
     def _hooked_forward(*args, **kwargs):
+        if cancel_token is not None and cancel_token.cancelled:
+            raise JobCancelled(cancel_token.reason or "stopped by user")
         if vram_state is not None and vram_state.tripped:
             raise VramLimitExceeded(vram_state.reason or "vram soft-limit exceeded")
 
@@ -328,6 +332,7 @@ async def run_inference(
     config: JobConfig,
     publish: PublishFn,
     vram_state: VramWatchState | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> dict:
     frames = _list_frames(frames_dir)
     if not frames:
@@ -378,6 +383,7 @@ async def run_inference(
                 _partial,
                 artifacts_dir,
                 vram_state,
+                cancel_token,
             )
 
     predictions, image_shape = await asyncio.to_thread(_sync_target)

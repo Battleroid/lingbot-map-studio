@@ -5,7 +5,9 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-JobStatus = Literal["queued", "ingest", "inference", "export", "ready", "failed"]
+JobStatus = Literal[
+    "queued", "ingest", "inference", "export", "ready", "failed", "cancelled"
+]
 EventLevel = Literal["info", "warn", "error", "stdout", "stderr", "debug"]
 EventStage = Literal[
     "queue",

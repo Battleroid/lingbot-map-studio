@@ -115,6 +115,14 @@ export function deleteJob(id: string): Promise<{ deleted: true }> {
   return fetchJson(`/api/jobs/${id}`, { method: "DELETE" });
 }
 
+export function stopJob(id: string): Promise<{ cancelled: true }> {
+  return fetchJson(`/api/jobs/${id}/stop`, { method: "POST" });
+}
+
+export function restartJob(id: string): Promise<{ id: string }> {
+  return fetchJson(`/api/jobs/${id}/restart`, { method: "POST" });
+}
+
 export function reexport(
   id: string,
   body: ReexportRequest,

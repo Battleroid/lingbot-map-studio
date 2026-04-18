@@ -6,7 +6,9 @@ import traceback
 from pathlib import Path
 
 from app.config import settings
+from app.jobs import cancel as cancel_mod
 from app.jobs import store
+from app.jobs.cancel import JobCancelled
 from app.jobs.events import bus
 from app.jobs.schema import Artifact, JobConfig, JobEvent
 from app.pipeline.checkpoints import ensure_checkpoint
@@ -27,8 +29,15 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
     frames_dir = settings.job_frames(job_id)
     artifacts_dir = settings.job_artifacts(job_id)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    cancel_token = cancel_mod.get_token(job_id)
+
+    def _check_cancel() -> None:
+        if cancel_token.cancelled:
+            raise JobCancelled(cancel_token.reason)
+
     try:
         await _publish(JobEvent(job_id=job_id, stage="queue", message="job starting"))
+        _check_cancel()
 
         # 1. ingest
         await store.update_job(job_id, status="ingest")
@@ -40,9 +49,11 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
             publish=_publish,
         )
         await store.update_job(job_id, frames_total=frames_total)
+        _check_cancel()
 
         # 2. checkpoint
         ckpt = await ensure_checkpoint(config.model_id, job_id, _publish)
+        _check_cancel()
 
         # 3. inference — spin up a VRAM watchdog alongside the GPU call.
         await store.update_job(job_id, status="inference")
@@ -59,6 +70,7 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 config=config,
                 publish=_publish,
                 vram_state=vram_state,
+                cancel_token=cancel_token,
             )
         finally:
             vram_state.stop()
@@ -66,6 +78,7 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 await asyncio.wait_for(watchdog_task, timeout=5.0)
             except asyncio.TimeoutError:
                 watchdog_task.cancel()
+        _check_cancel()
         await _publish(
             JobEvent(
                 job_id=job_id,
@@ -121,6 +134,21 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 data={"artifacts": [a.name for a in art_list]},
             )
         )
+    except JobCancelled as exc:
+        log.info("job %s cancelled: %s", job_id, exc)
+        await store.update_job(
+            job_id,
+            status="cancelled",
+            error=f"cancelled: {exc}",
+        )
+        await _publish(
+            JobEvent(
+                job_id=job_id,
+                stage="system",
+                level="warn",
+                message=f"cancelled: {exc}",
+            )
+        )
     except VramLimitExceeded as exc:
         log.warning("job %s aborted by vram watchdog: %s", job_id, exc)
         await store.update_job(
@@ -154,4 +182,5 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
             )
         )
     finally:
+        cancel_mod.drop_token(job_id)
         await bus.close(job_id)

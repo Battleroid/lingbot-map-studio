@@ -66,8 +66,8 @@ export function ViewerControls() {
         </Tip>
         <input
           type="range"
-          min={0.001}
-          max={0.05}
+          min={0.0005}
+          max={2}
           step={0.001}
           value={pointSize}
           onChange={(e) => setPointSize(Number(e.target.value))}
