@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { JobEvent } from "@/lib/types";
 
+const FRESH_MS = 1200;
+
 const LEVEL_ORDER: Record<string, number> = {
   error: 0,
   warn: 1,
@@ -26,11 +28,19 @@ export function LogStream({ events }: { events: JobEvent[] }) {
   });
   const [autoscroll, setAutoscroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const mountedAt = useRef(Date.now() + FRESH_MS);
 
   const filtered = useMemo(
     () => events.filter((e) => enabled[e.level] ?? true),
     [events, enabled],
   );
+
+  // Tick to re-render and drop the "fresh" class off old log lines.
+  const [, setFreshTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setFreshTick((x) => x + 1), 500);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!autoscroll) return;
@@ -87,15 +97,24 @@ export function LogStream({ events }: { events: JobEvent[] }) {
         </label>
       </div>
       <div ref={scrollRef} className="log-stream">
-        {filtered.map((ev) => (
-          <div key={ev.id} className="log-line" data-level={ev.level}>
-            <span style={{ color: "var(--muted)" }}>
-              [{ev.stage}]
-              {ev.progress !== null ? ` ${(ev.progress * 100).toFixed(0)}%` : ""}{" "}
-            </span>
-            {ev.message}
-          </div>
-        ))}
+        {filtered.map((ev) => {
+          const evTs = Date.parse(ev.created_at);
+          const isFresh =
+            evTs > mountedAt.current && Date.now() - evTs < FRESH_MS;
+          return (
+            <div
+              key={ev.id}
+              className={`log-line${isFresh ? " fresh" : ""}`}
+              data-level={ev.level}
+            >
+              <span style={{ color: "var(--muted)" }}>
+                [{ev.stage}]
+                {ev.progress !== null ? ` ${(ev.progress * 100).toFixed(0)}%` : ""}{" "}
+              </span>
+              {ev.message}
+            </div>
+          );
+        })}
         {filtered.length === 0 && (
           <div style={{ color: "var(--muted)" }}>no events</div>
         )}

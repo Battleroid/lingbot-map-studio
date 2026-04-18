@@ -5,11 +5,13 @@ import { use, useMemo, useState } from "react";
 
 import { ConfigPanel } from "@/components/ConfigPanel";
 import { ExportMenu } from "@/components/ExportMenu";
+import { JobStatusStrip } from "@/components/JobStatusStrip";
 import { LogStream } from "@/components/LogStream";
 import { MeshTools } from "@/components/MeshTools";
 import { ViewerCanvas } from "@/components/Viewer/Canvas";
 import { ViewerControls } from "@/components/Viewer/ViewerControls";
 import { useJobManifest } from "@/hooks/useJob";
+import { useJobStatus } from "@/hooks/useJobStatus";
 import { useJobStream } from "@/hooks/useJobStream";
 import { artifactUrl } from "@/lib/api";
 
@@ -20,7 +22,8 @@ interface Props {
 export default function JobPage({ params }: Props) {
   const { id } = use(params);
   const { data: manifest } = useJobManifest(id);
-  const { events, status, latestProgress, latestStage } = useJobStream(id);
+  const { events, status } = useJobStream(id);
+  const derived = useJobStatus(events, manifest?.status);
   const [meshOverride, setMeshOverride] = useState<string | null>(null);
 
   const activeMeshName = meshOverride || manifest?.latest_mesh || null;
@@ -45,21 +48,6 @@ export default function JobPage({ params }: Props) {
           <span className="chip" data-status={manifest?.status ?? "queued"}>
             {manifest?.status ?? "queued"}
           </span>
-          <span className="chip" data-status={status}>
-            ws {status}
-          </span>
-        </div>
-        <div style={{ flex: "0 1 280px", minWidth: 180 }}>
-          <div className="progress-bar">
-            <span
-              style={{
-                width: `${((latestProgress ?? (manifest?.status === "ready" ? 1 : 0)) * 100).toFixed(0)}%`,
-              }}
-            />
-          </div>
-          <div className="mono-small" style={{ marginTop: 2 }}>
-            {latestStage ?? "—"}
-          </div>
         </div>
       </header>
 
@@ -101,6 +89,11 @@ export default function JobPage({ params }: Props) {
       </aside>
 
       <section className="job-center">
+        <JobStatusStrip
+          derived={derived}
+          jobStatus={manifest?.status}
+          wsStatus={status}
+        />
         <ViewerControls />
         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
           <ViewerCanvas glbUrl={glbUrl} plyUrl={plyUrl} />
