@@ -11,6 +11,7 @@ import {
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
+import { CameraPath, type CameraPose } from "./CameraPath";
 import { LassoSelect } from "./LassoSelect";
 import { MeshLayer } from "./MeshLayer";
 import { PointCloud } from "./PointCloud";
@@ -19,6 +20,7 @@ import { useViewerStore } from "@/lib/viewerStore";
 interface Props {
   glbUrl: string | null;
   plyUrl: string | null;
+  cameraPath?: { fps: number; poses: CameraPose[] } | null;
 }
 
 function AxesAndGrid() {
@@ -45,25 +47,31 @@ function AxesAndGrid() {
  * Re-fits the camera when the user clicks "recenter". Per-mount initial fit
  * is handled inside PointCloud / MeshLayer — those only fire once per mount,
  * so partial updates during live inference don't steal the user's orbit.
+ *
+ * Also retriggers when cameraMode changes, so switching to fly mode lands on
+ * a known-good frame instead of leaving the user stranded far from the scene.
  */
 function RefitController() {
   const bounds = useBounds();
   const signal = useViewerStore((s) => s.refitSignal);
+  const cameraMode = useViewerStore((s) => s.cameraMode);
   useEffect(() => {
-    if (signal === 0) return; // skip initial render; user hasn't requested refit
     const id = requestAnimationFrame(() => {
       try {
-        bounds.refresh().clip().fit();
+        // Refresh picks up any new geometry; fit positions the camera.
+        // We no longer call clip() — it tightens near/far too aggressively,
+        // which frustum-culls everything as soon as fly mode walks away.
+        bounds.refresh().fit();
       } catch {
-        /* Bounds not ready */
+        /* Bounds not ready yet */
       }
     });
     return () => cancelAnimationFrame(id);
-  }, [bounds, signal]);
+  }, [bounds, signal, cameraMode]);
   return null;
 }
 
-export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
+export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
   const mode = useViewerStore((s) => s.mode);
   const cameraMode = useViewerStore((s) => s.cameraMode);
   const refitSignal = useViewerStore((s) => s.refitSignal);
@@ -94,8 +102,11 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
           {/* Bounds without `fit` = provide the useBounds context only; never
               fit on mount (which would fit on infinite grid before geometry
               arrives, causing the camera to zoom to ∞). Initial fit is
-              triggered by PointCloud/MeshLayer once their geometry loads. */}
-          <Bounds clip observe margin={1.3}>
+              triggered by PointCloud/MeshLayer once their geometry loads.
+              `clip` is deliberately off — it auto-tightens camera near/far
+              around the scene, which causes fly mode to frustum-cull
+              everything the moment the camera walks outside those bounds. */}
+          <Bounds observe margin={1.3}>
             <RefitController />
             {showMesh && glbUrl && (
               <MeshLayer url={glbUrl} wireframe={mode === "wireframe"} />
@@ -104,6 +115,12 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
               <PointCloud url={plyUrl} color={mode === "points-color"} />
             )}
           </Bounds>
+          {cameraPath && cameraPath.poses.length > 1 && (
+            <CameraPath
+              poses={cameraPath.poses}
+              recordedFps={cameraPath.fps || 10}
+            />
+          )}
           {showMesh && glbUrl && lassoActive && <LassoSelect />}
         </Suspense>
         {cameraMode === "orbit" ? (

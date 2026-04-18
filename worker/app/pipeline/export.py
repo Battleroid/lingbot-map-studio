@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -64,11 +65,14 @@ def _export_ply_pointcloud(
     out: Path,
     *,
     conf_percentile: Optional[float],
+    max_points: int = 2_000_000,
 ) -> None:
-    """Export only the colored point cloud as .ply (drop camera glyphs).
+    """Export the colored point cloud as .ply (drop camera glyphs).
 
     Uses the same percentile filter predictions_to_glb applies, then writes a
-    plain trimesh.PointCloud.
+    plain trimesh.PointCloud. Caps the result at `max_points` so the browser
+    can actually render it — the PLYLoader + WebGL combo struggles beyond
+    ~5M points and a typical full reconstruction easily hits 10M+.
     """
     import trimesh
 
@@ -96,7 +100,21 @@ def _export_ply_pointcloud(
     else:
         colors = np.full((pts.shape[0], 3), 200, dtype=np.uint8)
 
-    pc = trimesh.PointCloud(vertices=pts[mask], colors=colors[mask])
+    pts_m = pts[mask]
+    cols_m = colors[mask]
+
+    if pts_m.shape[0] > max_points:
+        step = int(pts_m.shape[0] // max_points) + 1
+        pts_m = pts_m[::step]
+        cols_m = cols_m[::step]
+        log.info(
+            "ply export downsampled from %d → %d points (step=%d)",
+            int(mask.sum()),
+            pts_m.shape[0],
+            step,
+        )
+
+    pc = trimesh.PointCloud(vertices=pts_m, colors=cols_m)
     pc.export(str(out))
 
 
@@ -177,6 +195,45 @@ async def export_reconstruction(
 
     glb_path = await _run_stage("writing GLB", _build_glb)
     ply_path = await _run_stage("writing PLY", _build_ply)
+
+    # Save the camera trajectory so the viewer can draw the path and play
+    # it back. extrinsic is c2w (S, 3, 4) — translation is the last column.
+    def _write_camera_path() -> Path:
+        from scipy.spatial.transform import Rotation
+
+        ext = np.asarray(predictions.get("extrinsic"))
+        if ext.ndim == 4 and ext.shape[0] == 1:
+            ext = ext[0]
+        if ext.ndim != 3 or ext.shape[-2:] != (3, 4):
+            raise RuntimeError(f"unexpected extrinsic shape: {ext.shape}")
+
+        positions = ext[:, :, 3]                # (S, 3)
+        rot_mats = ext[:, :, :3]                # (S, 3, 3)
+        quats = Rotation.from_matrix(rot_mats).as_quat()  # (S, 4) xyzw
+
+        poses = [
+            {
+                "position": [float(positions[i, 0]), float(positions[i, 1]), float(positions[i, 2])],
+                "quaternion": [float(quats[i, 0]), float(quats[i, 1]), float(quats[i, 2]), float(quats[i, 3])],
+            }
+            for i in range(positions.shape[0])
+        ]
+        out = artifacts_dir / "camera_path.json"
+        out.write_text(json.dumps({"fps": float(config.fps), "poses": poses}))
+        return out
+
+    try:
+        cam_path = await asyncio.to_thread(_write_camera_path)
+        await publish(
+            JobEvent(
+                job_id=job_id,
+                stage="artifact",
+                message=f"camera path saved: {len(json.loads(cam_path.read_text())['poses'])} poses",
+                data={"name": cam_path.name, "kind": "camera_path"},
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("failed to write camera_path.json: %s", exc)
 
     # Clean up live-preview partial PLYs now that the real reconstruction is
     # in place. Also drop their artifact events from the client's mental model

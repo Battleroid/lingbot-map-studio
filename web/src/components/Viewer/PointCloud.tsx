@@ -43,9 +43,9 @@ export function PointCloud({ url, color }: Props) {
     hasFittedRef.current = true;
     const id = requestAnimationFrame(() => {
       try {
-        bounds.refresh().clip().fit();
+        // No .clip() — tightening near/far breaks fly mode (see Canvas.tsx).
+        bounds.refresh().fit();
       } catch {
-        /* Bounds not ready yet; rerun on next mount. */
         hasFittedRef.current = false;
       }
     });

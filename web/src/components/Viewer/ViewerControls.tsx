@@ -18,7 +18,12 @@ const MODES: { value: RenderMode; label: string; tip: string }[] = [
   },
 ];
 
-export function ViewerControls() {
+interface Props {
+  /** Total poses in the recorded camera path. 0 disables playback UI. */
+  pathPoseCount?: number;
+}
+
+export function ViewerControls({ pathPoseCount = 0 }: Props) {
   const mode = useViewerStore((s) => s.mode);
   const setMode = useViewerStore((s) => s.setMode);
   const cameraMode = useViewerStore((s) => s.cameraMode);
@@ -34,6 +39,14 @@ export function ViewerControls() {
   const meshHistoryIndex = useViewerStore((s) => s.meshHistoryIndex);
   const undo = useViewerStore((s) => s.undo);
   const redo = useViewerStore((s) => s.redo);
+  const showCameraPath = useViewerStore((s) => s.showCameraPath);
+  const setShowCameraPath = useViewerStore((s) => s.setShowCameraPath);
+  const playing = useViewerStore((s) => s.playing);
+  const setPlaying = useViewerStore((s) => s.setPlaying);
+  const playbackFrame = useViewerStore((s) => s.playbackFrame);
+  const setPlaybackFrame = useViewerStore((s) => s.setPlaybackFrame);
+  const playbackSpeed = useViewerStore((s) => s.playbackSpeed);
+  const setPlaybackSpeed = useViewerStore((s) => s.setPlaybackSpeed);
 
   const canUndo = meshHistoryIndex >= 0;
   const canRedo = meshHistoryIndex < meshHistory.length - 1;
@@ -154,6 +167,82 @@ export function ViewerControls() {
             recenter
           </button>
         </Tip>
+        {pathPoseCount > 1 && (
+          <>
+            <span
+              style={{
+                width: 1,
+                height: 16,
+                background: "var(--rule)",
+                margin: "0 4px",
+              }}
+            />
+            <Tip
+              text="Show/hide the recorded camera trajectory drawn as a line through the scene."
+              showIcon={false}
+            >
+              <button
+                type="button"
+                data-pressed={showCameraPath}
+                onClick={() => setShowCameraPath(!showCameraPath)}
+              >
+                path
+              </button>
+            </Tip>
+            <Tip
+              text={
+                playing
+                  ? "Pause playback."
+                  : "Fly the camera through the recorded trajectory at the capture fps. Scroll the slider to scrub."
+              }
+              showIcon={false}
+            >
+              <button
+                type="button"
+                data-pressed={playing}
+                onClick={() => setPlaying(!playing)}
+              >
+                {playing ? "⏸ pause" : "▶ play"}
+              </button>
+            </Tip>
+            <input
+              type="range"
+              min={0}
+              max={pathPoseCount - 1}
+              step={1}
+              value={Math.round(playbackFrame)}
+              onChange={(e) => {
+                setPlaying(false);
+                setPlaybackFrame(Number(e.target.value));
+              }}
+              style={{ width: 120 }}
+              title="Scrub camera position along the path"
+            />
+            <span
+              className="mono-small"
+              style={{ minWidth: 64, textAlign: "right" }}
+              title="Current pose / total poses"
+            >
+              {Math.round(playbackFrame) + 1}/{pathPoseCount}
+            </span>
+            <Tip
+              text="Playback speed multiplier against the recorded capture fps."
+              showIcon={false}
+            >
+              <select
+                value={playbackSpeed}
+                onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
+                style={{ width: 60 }}
+              >
+                <option value={0.25}>0.25×</option>
+                <option value={0.5}>0.5×</option>
+                <option value={1}>1×</option>
+                <option value={2}>2×</option>
+                <option value={4}>4×</option>
+              </select>
+            </Tip>
+          </>
+        )}
         <Tip text="Hold and drag to draw a polygon. Faces whose centroids land inside are selected for mesh-tool operations.">
           <button
             type="button"

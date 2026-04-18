@@ -14,6 +14,14 @@ export interface MeshRevision {
 interface ViewerState {
   mode: RenderMode;
   cameraMode: CameraMode;
+  /** Draw the recorded camera path as a line in the scene. */
+  showCameraPath: boolean;
+  /** When playing, the camera is driven through the recorded poses. */
+  playing: boolean;
+  /** Current pose index in the recorded camera path during playback. */
+  playbackFrame: number;
+  /** Playback speed multiplier. 1.0 = recorded fps. */
+  playbackSpeed: number;
   /** Mesh-edit undo stack. Does NOT include the base reconstruction. */
   meshHistory: MeshRevision[];
   /** Pointer into meshHistory. -1 = showing base reconstruction (no edits). */
@@ -32,6 +40,10 @@ interface ViewerState {
   refitSignal: number; // incremented to request a camera re-fit
   setMode: (m: RenderMode) => void;
   setCameraMode: (m: CameraMode) => void;
+  setShowCameraPath: (v: boolean) => void;
+  setPlaying: (v: boolean) => void;
+  setPlaybackFrame: (v: number) => void;
+  setPlaybackSpeed: (v: number) => void;
   /** Called after a successful mesh-edit response. Branches history if the
    *  user had undone past some edits (classic undo stack behavior). */
   pushRevision: (rev: MeshRevision) => void;
@@ -52,6 +64,10 @@ interface ViewerState {
 export const useViewerStore = create<ViewerState>((set) => ({
   mode: "points-color",
   cameraMode: "orbit",
+  showCameraPath: true,
+  playing: false,
+  playbackFrame: 0,
+  playbackSpeed: 1,
   meshHistory: [],
   meshHistoryIndex: -1,
   showFrustums: true,
@@ -64,7 +80,12 @@ export const useViewerStore = create<ViewerState>((set) => ({
   activeMeshName: null,
   refitSignal: 0,
   setMode: (mode) => set({ mode }),
-  setCameraMode: (cameraMode) => set({ cameraMode }),
+  setCameraMode: (cameraMode) =>
+    set({ cameraMode, playing: false }),  // stop playback on mode change
+  setShowCameraPath: (showCameraPath) => set({ showCameraPath }),
+  setPlaying: (playing) => set({ playing }),
+  setPlaybackFrame: (playbackFrame) => set({ playbackFrame }),
+  setPlaybackSpeed: (playbackSpeed) => set({ playbackSpeed }),
   pushRevision: (rev) =>
     set((s) => {
       // If we're mid-undo (index isn't at the tail), drop everything after

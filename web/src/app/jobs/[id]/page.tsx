@@ -10,6 +10,8 @@ import { LogStream } from "@/components/LogStream";
 import { MeshTools } from "@/components/MeshTools";
 import { ViewerCanvas } from "@/components/Viewer/Canvas";
 import { ViewerControls } from "@/components/Viewer/ViewerControls";
+import { ViewerErrorBoundary } from "@/components/Viewer/ViewerErrorBoundary";
+import { useCameraPath } from "@/hooks/useCameraPath";
 import { useJobManifest } from "@/hooks/useJob";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { useJobStream } from "@/hooks/useJobStream";
@@ -123,6 +125,13 @@ export default function JobPage({ params }: Props) {
   const glbUrl = activeMeshName ? artifactUrl(id, activeMeshName) : null;
   const plyUrl = plyName ? artifactUrl(id, plyName) : null;
 
+  // Camera path is only produced on successful export — only fetch when the
+  // manifest actually lists it (avoids spurious 404s during inference).
+  const cameraPathAvailable = Boolean(
+    manifest?.artifacts?.some((a) => a.name === "camera_path.json"),
+  );
+  const { data: cameraPath } = useCameraPath(id, cameraPathAvailable);
+
   return (
     <div className="job-shell">
       <header className="job-header">
@@ -214,9 +223,15 @@ export default function JobPage({ params }: Props) {
           jobStatus={manifest?.status}
           wsStatus={status}
         />
-        <ViewerControls />
+        <ViewerControls pathPoseCount={cameraPath?.poses.length ?? 0} />
         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
-          <ViewerCanvas glbUrl={glbUrl} plyUrl={plyUrl} />
+          <ViewerErrorBoundary resetKey={`${glbUrl}|${plyUrl}`}>
+            <ViewerCanvas
+              glbUrl={glbUrl}
+              plyUrl={plyUrl}
+              cameraPath={cameraPath}
+            />
+          </ViewerErrorBoundary>
           {plyName && plyName.startsWith("partial_") && (
             <div
               style={{

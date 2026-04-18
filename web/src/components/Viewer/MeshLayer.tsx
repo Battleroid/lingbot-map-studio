@@ -22,7 +22,8 @@ export function MeshLayer({ url, wireframe }: Props) {
     hasFittedRef.current = true;
     const id = requestAnimationFrame(() => {
       try {
-        bounds.refresh().clip().fit();
+        // No .clip() — it frustum-culls everything in fly mode.
+        bounds.refresh().fit();
       } catch {
         hasFittedRef.current = false;
       }
