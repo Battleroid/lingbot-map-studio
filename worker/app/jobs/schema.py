@@ -65,6 +65,14 @@ class JobConfig(BaseModel):
     osd_mask_samples: int = 60
     osd_mask_std_threshold: float = 5.0
     osd_mask_dilate: int = 2
+    # Second detector: flag pixels that live near an edge in >N% of sampled
+    # frames. Catches changing OSD digits that the stddev detector misses.
+    osd_detect_text: bool = True
+    osd_edge_persist_frac: float = 0.75
+
+    # Per-job VRAM soft limit in GB. If allocated GPU memory crosses this during
+    # inference the watchdog aborts the job. None = use worker-wide default.
+    vram_soft_limit_gb: Optional[float] = None
 
 
 class Artifact(BaseModel):

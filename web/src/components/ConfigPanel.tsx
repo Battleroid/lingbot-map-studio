@@ -59,6 +59,12 @@ const TIPS: Record<string, string> = {
     "Per-pixel standard-deviation cutoff (0-255 scale). Pixels below this are treated as static overlay. 5 is a conservative default; raise to 10-15 for aggressive masking, drop for subtle overlays.",
   osd_mask_dilate:
     "Morphological dilation iterations on the mask — grows it outward to catch anti-aliased text edges. 2-3 usually enough.",
+  osd_detect_text:
+    "Second OSD signal: flag regions that are near an edge in most sampled frames. Catches changing numeric HUD values (e.g. battery voltage ticking down) that the stddev-only detector misses because the digit pixels themselves change.",
+  osd_edge_persist_frac:
+    "Fraction of frames (0-1) where a pixel must be near an edge to be flagged as text. Higher = stricter (fewer false positives on scene edges), lower = more aggressive. 0.75 is a balanced default.",
+  vram_soft_limit_gb:
+    "Per-job VRAM soft limit in GB. A background watchdog samples GPU memory every 2s during inference; if allocated VRAM exceeds this, the job is aborted cleanly before the kernel kills the process. Leave blank to use the worker default (22 GB on a 24 GB card). The worker also enforces a hard process-wide cap to keep WSL2 from hanging the host.",
 };
 
 function NumberRow({
@@ -393,8 +399,61 @@ export function ConfigPanel({ config, onChange, readOnly, compact, title }: Prop
               readOnly={readOnly}
               onChange={(v) => onChange({ osd_mask_dilate: v })}
             />
+            <BoolRow
+              label="osd · detect text"
+              tipKey="osd_detect_text"
+              value={config.osd_detect_text}
+              readOnly={readOnly}
+              onChange={(v) => onChange({ osd_detect_text: v })}
+            />
+            {config.osd_detect_text && (
+              <NumberRow
+                label="osd · edge persist"
+                tipKey="osd_edge_persist_frac"
+                value={config.osd_edge_persist_frac}
+                step={0.05}
+                min={0.3}
+                max={0.99}
+                readOnly={readOnly}
+                onChange={(v) => onChange({ osd_edge_persist_frac: v })}
+              />
+            )}
           </>
         )}
+
+        <div
+          style={{
+            marginTop: 6,
+            paddingTop: 6,
+            borderTop: "1px solid var(--rule)",
+          }}
+        >
+          <div className="section-title">guardrails</div>
+        </div>
+        <label className="stat">
+          <span>
+            <span className="tip-target" data-tip={TIPS.vram_soft_limit_gb} tabIndex={0}>
+              vram soft limit (gb)
+              <span className="tip-icon">?</span>
+            </span>
+          </span>
+          <input
+            type="number"
+            value={config.vram_soft_limit_gb ?? ""}
+            step={1}
+            min={1}
+            max={80}
+            placeholder="default"
+            readOnly={readOnly}
+            disabled={readOnly}
+            onChange={(e) =>
+              onChange({
+                vram_soft_limit_gb:
+                  e.target.value === "" ? null : Number(e.target.value),
+              })
+            }
+          />
+        </label>
       </div>
     </div>
   );

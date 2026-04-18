@@ -48,11 +48,36 @@ from app.utils.paths import new_job_id, safe_filename
 log = logging.getLogger(__name__)
 
 
+def _apply_vram_cap() -> None:
+    """Cap this process's total CUDA memory to a fraction of device VRAM.
+
+    Set before any real allocations happen. Prevents a runaway job from
+    paging GPU memory on WSL2, which can hang the Windows host.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        frac = max(0.1, min(1.0, settings.vram_limit_fraction))
+        torch.cuda.set_per_process_memory_fraction(frac, 0)
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        log.info(
+            "cuda memory cap: %.2f × %.1f GB = %.1f GB",
+            frac,
+            total,
+            frac * total,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("failed to apply vram cap: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
     settings.ensure_dirs()
     await store.init_store()
+    _apply_vram_cap()
     yield
 
 
@@ -244,6 +269,8 @@ async def preview_osd(
     samples: int = 30,
     std_threshold: float = 5.0,
     dilate: int = 2,
+    detect_text: bool = True,
+    edge_persist_frac: float = 0.75,
     fisheye: bool = False,
     in_fov: float = 165.0,
     out_fov: float = 90.0,
@@ -264,7 +291,11 @@ async def preview_osd(
     preview_dir.mkdir(parents=True, exist_ok=True)
 
     work_video = src_video
-    key = f"osd_s{samples}_t{std_threshold:g}_d{dilate}"
+    txt_key = "t1" if detect_text else "t0"
+    key = (
+        f"osd_s{samples}_v{std_threshold:g}_d{dilate}_{txt_key}"
+        f"_e{edge_persist_frac:g}"
+    )
     if fisheye:
         key = f"{key}_fe{int(in_fov)}x{int(out_fov)}"
     out_png = preview_dir / f"{key}.png"
@@ -289,6 +320,8 @@ async def preview_osd(
             dilate=dilate,
             duration_s=duration,
             fps_hint=fps_hint,
+            detect_text=detect_text,
+            edge_persist_frac=edge_persist_frac,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

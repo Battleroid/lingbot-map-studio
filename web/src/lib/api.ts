@@ -158,6 +158,8 @@ export function osdPreviewUrl(
     samples?: number;
     std_threshold?: number;
     dilate?: number;
+    detect_text?: boolean;
+    edge_persist_frac?: number;
     fisheye?: boolean;
     in_fov?: number;
     out_fov?: number;
@@ -169,6 +171,10 @@ export function osdPreviewUrl(
   if (opts.std_threshold !== undefined)
     qs.set("std_threshold", String(opts.std_threshold));
   if (opts.dilate !== undefined) qs.set("dilate", String(opts.dilate));
+  if (opts.detect_text !== undefined)
+    qs.set("detect_text", String(opts.detect_text));
+  if (opts.edge_persist_frac !== undefined)
+    qs.set("edge_persist_frac", String(opts.edge_persist_frac));
   if (opts.fisheye) qs.set("fisheye", "true");
   if (opts.in_fov !== undefined) qs.set("in_fov", String(opts.in_fov));
   if (opts.out_fov !== undefined) qs.set("out_fov", String(opts.out_fov));

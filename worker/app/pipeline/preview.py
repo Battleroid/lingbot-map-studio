@@ -107,8 +107,18 @@ async def extract_sample_frames(
 
 
 def _compute_osd_mask_sync(
-    frames: list[Path], std_threshold: float, dilate: int
+    frames: list[Path],
+    std_threshold: float,
+    dilate: int,
+    detect_text: bool = True,
+    edge_persist_frac: float = 0.75,
 ) -> Optional[np.ndarray]:
+    """Same two-signal algorithm as preproc._compute_osd_mask but for previews.
+
+    Signal 1: low temporal stddev = truly static pixels (labels, boxes, logos).
+    Signal 2: high temporal edge persistence = text regions, even when the
+              digits themselves change frame-to-frame.
+    """
     import cv2
 
     if len(frames) < 3:
@@ -120,6 +130,11 @@ def _compute_osd_mask_sync(
     n = 0
     sum_img = np.zeros((h, w, 3), dtype=np.float64)
     sum_sq = np.zeros((h, w, 3), dtype=np.float64)
+    edge_hits: Optional[np.ndarray] = (
+        np.zeros((h, w), dtype=np.float64) if detect_text else None
+    )
+    edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+
     for p in frames:
         img = cv2.imread(str(p))
         if img is None or img.shape[:2] != (h, w):
@@ -127,13 +142,26 @@ def _compute_osd_mask_sync(
         arr = img.astype(np.float64)
         sum_img += arr
         sum_sq += arr * arr
+        if edge_hits is not None:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 80, 160)
+            edges_dil = cv2.dilate(edges, edge_kernel, iterations=1)
+            edge_hits += (edges_dil > 0).astype(np.float64)
         n += 1
     if n < 3:
         return None
     mean = sum_img / n
     var = np.maximum(sum_sq / n - mean * mean, 0.0)
     std = np.sqrt(var).mean(axis=-1)
-    mask = (std < std_threshold).astype(np.uint8) * 255
+    static_mask = (std < std_threshold).astype(np.uint8) * 255
+
+    if edge_hits is not None:
+        edge_frac = edge_hits / n
+        text_mask = (edge_frac >= edge_persist_frac).astype(np.uint8) * 255
+        mask = cv2.bitwise_or(static_mask, text_mask)
+    else:
+        mask = static_mask
+
     if dilate > 0:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         mask = cv2.dilate(mask, kernel, iterations=dilate)
@@ -149,6 +177,8 @@ async def render_osd_preview(
     dilate: int,
     duration_s: Optional[float],
     fps_hint: Optional[float],
+    detect_text: bool = True,
+    edge_persist_frac: float = 0.75,
 ) -> dict:
     """Compute an OSD mask and render an overlay: mask shown as red on the first frame."""
     import cv2
@@ -164,7 +194,12 @@ async def render_osd_preview(
         raise RuntimeError(f"need >=3 sample frames, got {len(frames)}")
 
     mask = await asyncio.to_thread(
-        _compute_osd_mask_sync, frames, std_threshold, dilate
+        _compute_osd_mask_sync,
+        frames,
+        std_threshold,
+        dilate,
+        detect_text,
+        edge_persist_frac,
     )
     if mask is None:
         raise RuntimeError("mask computation returned None")

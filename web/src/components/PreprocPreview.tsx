@@ -117,6 +117,8 @@ export function PreprocPreview({ draftId, config }: Props) {
   const samples = useDebounced(config.osd_mask_samples, 500);
   const stdT = useDebounced(config.osd_mask_std_threshold, 500);
   const dilate = useDebounced(config.osd_mask_dilate, 500);
+  const detectText = useDebounced(config.osd_detect_text, 500);
+  const edgeFrac = useDebounced(config.osd_edge_persist_frac, 500);
   const useFisheye = config.preproc_fisheye;
   const useOsd = config.preproc_osd_mask;
 
@@ -139,11 +141,13 @@ export function PreprocPreview({ draftId, config }: Props) {
         samples,
         std_threshold: stdT,
         dilate,
+        detect_text: detectText,
+        edge_persist_frac: edgeFrac,
         fisheye: useFisheye,
         in_fov: inFov,
         out_fov: outFov,
       }),
-    [draftId, samples, stdT, dilate, useFisheye, inFov, outFov],
+    [draftId, samples, stdT, dilate, detectText, edgeFrac, useFisheye, inFov, outFov],
   );
 
   if (!useFisheye && !useOsd) {
@@ -195,7 +199,7 @@ export function PreprocPreview({ draftId, config }: Props) {
           <LoadingImg
             src={osdUrl}
             alt="OSD mask overlay"
-            label={`osd mask · thr ${stdT} · dilate ${dilate}`}
+            label={`osd mask · ${detectText ? `edge ${edgeFrac} + ` : ""}std ${stdT} · dilate ${dilate}`}
           />
         )}
       </div>

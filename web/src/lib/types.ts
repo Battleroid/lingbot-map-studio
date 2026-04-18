@@ -59,6 +59,11 @@ export interface JobConfig {
   osd_mask_samples: number;
   osd_mask_std_threshold: number;
   osd_mask_dilate: number;
+  osd_detect_text: boolean;
+  osd_edge_persist_frac: number;
+
+  // Guardrails
+  vram_soft_limit_gb: number | null;
 }
 
 export interface JobSummary {
@@ -171,6 +176,9 @@ export const DEFAULT_CONFIG: JobConfig = {
   osd_mask_samples: 60,
   osd_mask_std_threshold: 5,
   osd_mask_dilate: 2,
+  osd_detect_text: true,
+  osd_edge_persist_frac: 0.75,
+  vram_soft_limit_gb: null,
 };
 
 export const PRESETS: Record<string, Partial<JobConfig>> = {

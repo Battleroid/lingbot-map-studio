@@ -11,6 +11,7 @@ import numpy as np
 
 from app.jobs.schema import JobConfig, JobEvent
 from app.pipeline.progress import capture_stdio
+from app.pipeline.watchdog import VramLimitExceeded, VramWatchState
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ def _run_inference_sync(
     ckpt_path: Path,
     config: JobConfig,
     progress_cb: Callable[[int, int], None],
+    vram_state: VramWatchState | None = None,
 ) -> tuple[dict, tuple[int, ...]]:
     """Synchronous GPU inference. Runs in a worker thread."""
     import torch
@@ -131,6 +133,10 @@ def _run_inference_sync(
     total = int(images.shape[0] if images.ndim == 4 else images.shape[1])
 
     def _hooked_forward(*args, **kwargs):
+        # Bail before the next forward pass if the watchdog tripped. Lets the
+        # inference thread unwind cleanly rather than being OOM-killed.
+        if vram_state is not None and vram_state.tripped:
+            raise VramLimitExceeded(vram_state.reason or "vram soft-limit exceeded")
         result = orig_forward(*args, **kwargs)
         frame_count["i"] += 1
         progress_cb(frame_count["i"], total)
@@ -183,6 +189,7 @@ async def run_inference(
     ckpt_path: Path,
     config: JobConfig,
     publish: PublishFn,
+    vram_state: VramWatchState | None = None,
 ) -> dict:
     frames = _list_frames(frames_dir)
     if not frames:
@@ -207,7 +214,9 @@ async def run_inference(
 
     def _sync_target():
         with capture_stdio(job_id, publish, "inference", loop):
-            return _run_inference_sync(frames, ckpt_path, config, _progress)
+            return _run_inference_sync(
+                frames, ckpt_path, config, _progress, vram_state
+            )
 
     predictions, image_shape = await asyncio.to_thread(_sync_target)
 

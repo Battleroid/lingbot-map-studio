@@ -47,7 +47,27 @@ def _compute_osd_mask(
     samples: int,
     std_threshold: float,
     dilate: int,
+    detect_text: bool = True,
+    edge_persist_frac: float = 0.75,
 ) -> np.ndarray | None:
+    """Two-signal OSD mask:
+
+    1. **Static pixels** — pixels whose temporal stddev across sampled frames
+       is below `std_threshold`. Catches constant parts of overlays
+       (label strings like "BAT:", box backgrounds, logos, icons).
+
+    2. **Text-like persistence** (optional, when `detect_text=True`) — for each
+       frame we Canny-edge it and dilate the edges by ~5px, then count how
+       often each pixel lands inside that dilated edge map across all samples.
+       Pixels that are near an edge in ≥ `edge_persist_frac` of frames are
+       flagged. This catches CHANGING numeric HUD values ("12.4V" → "12.3V"):
+       the specific glyph pixels differ frame-to-frame so signal (1) misses
+       them, but the region is always edge-rich so signal (2) catches it.
+       Scene edges move with the camera, so a scene pixel is near an edge
+       only briefly and falls below the persistence threshold.
+
+    The two masks are unioned, then dilated to grow over anti-aliased edges.
+    """
     import cv2
 
     if len(frame_paths) < 3:
@@ -62,10 +82,15 @@ def _compute_osd_mask(
     if first is None:
         return None
     h, w = first.shape[:2]
-    n = len(selected)
 
     sum_img = np.zeros((h, w, 3), dtype=np.float64)
     sum_sq = np.zeros((h, w, 3), dtype=np.float64)
+    edge_hits: np.ndarray | None = (
+        np.zeros((h, w), dtype=np.float64) if detect_text else None
+    )
+    edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+
+    n = 0
     for p in selected:
         img = cv2.imread(str(p))
         if img is None or img.shape[:2] != (h, w):
@@ -73,10 +98,26 @@ def _compute_osd_mask(
         arr = img.astype(np.float64)
         sum_img += arr
         sum_sq += arr * arr
+        if edge_hits is not None:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 80, 160)
+            edges_dil = cv2.dilate(edges, edge_kernel, iterations=1)
+            edge_hits += (edges_dil > 0).astype(np.float64)
+        n += 1
+    if n < 3:
+        return None
+
     mean = sum_img / n
     var = np.maximum(sum_sq / n - mean * mean, 0.0)
     std = np.sqrt(var).mean(axis=-1)
-    mask = (std < std_threshold).astype(np.uint8) * 255
+    static_mask = (std < std_threshold).astype(np.uint8) * 255
+
+    if edge_hits is not None:
+        edge_frac = edge_hits / n
+        text_mask = (edge_frac >= edge_persist_frac).astype(np.uint8) * 255
+        mask = cv2.bitwise_or(static_mask, text_mask)
+    else:
+        mask = static_mask
 
     if dilate > 0:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -120,6 +161,8 @@ async def apply_osd_mask(
         config.osd_mask_samples,
         config.osd_mask_std_threshold,
         config.osd_mask_dilate,
+        config.osd_detect_text,
+        config.osd_edge_persist_frac,
     )
     if mask is None or not mask.any():
         await _publish(

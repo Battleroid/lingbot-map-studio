@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     default_model_id: str = "lingbot-map"
     event_replay_size: int = 2048
     cors_origins: list[str] = ["*"]
+    # Process-wide hard cap on CUDA memory, as a fraction of total device VRAM.
+    # When exceeded, PyTorch raises torch.cuda.OutOfMemoryError cleanly — a
+    # much better outcome than WSL2 paging VRAM and hanging the host.
+    vram_limit_fraction: float = 0.85
+    # Watchdog poll interval and default soft-limit used when a job doesn't
+    # supply its own cap. In GB.
+    vram_watchdog_interval_s: float = 2.0
+    vram_default_soft_limit_gb: float = 22.0
 
     model_config = SettingsConfigDict(env_file=None, case_sensitive=False)
 
