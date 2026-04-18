@@ -47,6 +47,8 @@ export function ViewerControls({ pathPoseCount = 0 }: Props) {
   const setPlaybackFrame = useViewerStore((s) => s.setPlaybackFrame);
   const playbackSpeed = useViewerStore((s) => s.playbackSpeed);
   const setPlaybackSpeed = useViewerStore((s) => s.setPlaybackSpeed);
+  const flySpeedMult = useViewerStore((s) => s.flySpeedMult);
+  const setFlySpeedMult = useViewerStore((s) => s.setFlySpeedMult);
 
   const canUndo = meshHistoryIndex >= 0;
   const canRedo = meshHistoryIndex < meshHistory.length - 1;
@@ -146,7 +148,7 @@ export function ViewerControls({ pathPoseCount = 0 }: Props) {
           </button>
         </Tip>
         <Tip
-          text="Orbit: click-drag rotates around a pivot; scroll zooms. Fly: WASD translates, mouse-drag looks around, Q/E roll."
+          text="Orbit: click-drag rotates around a pivot; scroll zooms. Fly: WASD translates, mouse-drag looks around, Q/E roll, hold Shift to crawl."
           showIcon={false}
         >
           <button
@@ -159,6 +161,39 @@ export function ViewerControls({ pathPoseCount = 0 }: Props) {
             {cameraMode === "fly" ? "fly" : "orbit"}
           </button>
         </Tip>
+        {cameraMode === "fly" && (
+          <Tip
+            text="Fly-mode speed multiplier. 1× traverses the scene in ~5 s at full key hold. Shift while holding any movement key temporarily slows to ~12% for precise positioning."
+            showIcon={false}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: "var(--fs-xs)",
+                color: "var(--muted)",
+              }}
+            >
+              speed
+              <input
+                type="range"
+                min={0.1}
+                max={5}
+                step={0.1}
+                value={flySpeedMult}
+                onChange={(e) => setFlySpeedMult(Number(e.target.value))}
+                style={{ width: 80 }}
+              />
+              <span
+                className="mono-small"
+                style={{ minWidth: 32, textAlign: "right" }}
+              >
+                {flySpeedMult.toFixed(1)}×
+              </span>
+            </span>
+          </Tip>
+        )}
         <Tip
           text="Reframe the camera on the current geometry. Use when the reconstruction drifts out of view or after lassoing / editing."
           showIcon={false}

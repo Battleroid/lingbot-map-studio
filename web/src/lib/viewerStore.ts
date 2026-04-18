@@ -33,6 +33,10 @@ interface ViewerState {
   pointSizeScale: number;
   /** Final applied size = autoPointSize * pointSizeScale. */
   pointSize: number;
+  /** Scene bounding-box diagonal, used to scale camera movement speed. */
+  sceneDiagonal: number;
+  /** User multiplier on fly-mode base speed. 1.0 ≈ traverse scene in ~5 s. */
+  flySpeedMult: number;
   confPercentile: number;
   selection: Set<number>;
   lassoActive: boolean;
@@ -53,6 +57,8 @@ interface ViewerState {
   setShowFrustums: (v: boolean) => void;
   setAutoPointSize: (v: number) => void;
   setPointSizeScale: (v: number) => void;
+  setSceneDiagonal: (v: number) => void;
+  setFlySpeedMult: (v: number) => void;
   setConfPercentile: (v: number) => void;
   setSelection: (s: Set<number>) => void;
   clearSelection: () => void;
@@ -74,6 +80,8 @@ export const useViewerStore = create<ViewerState>((set) => ({
   autoPointSize: 0.01,
   pointSizeScale: 1,
   pointSize: 0.01,
+  sceneDiagonal: 10,
+  flySpeedMult: 1,
   confPercentile: 50,
   selection: new Set(),
   lassoActive: false,
@@ -114,6 +122,8 @@ export const useViewerStore = create<ViewerState>((set) => ({
     set((s) => ({ autoPointSize: v, pointSize: v * s.pointSizeScale })),
   setPointSizeScale: (v) =>
     set((s) => ({ pointSizeScale: v, pointSize: s.autoPointSize * v })),
+  setSceneDiagonal: (sceneDiagonal) => set({ sceneDiagonal }),
+  setFlySpeedMult: (flySpeedMult) => set({ flySpeedMult }),
   setConfPercentile: (confPercentile) => set({ confPercentile }),
   setSelection: (selection) => set({ selection }),
   clearSelection: () => set({ selection: new Set() }),

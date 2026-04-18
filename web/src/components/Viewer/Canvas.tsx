@@ -72,39 +72,67 @@ function RefitController() {
   return null;
 }
 
-const BASE_FLY_SPEED = 2;
-const SHIFT_SLOW_FACTOR = 0.15;
+// Base speed is picked so traversing the entire scene takes ~5 s at a
+// continuous key hold, scaled by the user's fly-speed multiplier.
+const BASE_SPEED_PER_DIAG = 0.2;
+const SHIFT_SLOW_FACTOR = 0.12;
 
-/** Listens for Shift keydown/up while fly mode is active and scales the
- *  FlyControls' movementSpeed accordingly. Rendered inside the <Canvas>. */
+/**
+ * Drives the FlyControls' `movementSpeed` from the scene's bounding-box
+ * diagonal and listens for Shift to temporarily slow to a crawl.
+ *
+ * Without scene-aware scaling, a fixed movement speed is useless because
+ * the reconstructions span anything from 2 units across to 200+.
+ */
 function FlySpeedModifier({
   flyRef,
 }: {
   flyRef: React.RefObject<FlyControlsImpl | null>;
 }) {
+  const sceneDiagonal = useViewerStore((s) => s.sceneDiagonal);
+  const flySpeedMult = useViewerStore((s) => s.flySpeedMult);
+  const shiftHeldRef = useRef(false);
+
+  const baseSpeed = Math.max(0.05, sceneDiagonal * BASE_SPEED_PER_DIAG * flySpeedMult);
+
+  // Apply whenever base speed changes (scene diagonal updated, multiplier
+  // changed, or controls remounted on refit).
   useEffect(() => {
-    const onKey = (down: boolean) => (e: KeyboardEvent) => {
-      if (e.key !== "Shift") return;
+    const fc = flyRef.current;
+    if (!fc) return;
+    fc.movementSpeed = shiftHeldRef.current
+      ? baseSpeed * SHIFT_SLOW_FACTOR
+      : baseSpeed;
+  }, [baseSpeed, flyRef]);
+
+  useEffect(() => {
+    const apply = () => {
       const fc = flyRef.current;
       if (!fc) return;
-      // FlyControls' movementSpeed is public; mutating directly takes effect
-      // on the next update() tick.
-      fc.movementSpeed = down
-        ? BASE_FLY_SPEED * SHIFT_SLOW_FACTOR
-        : BASE_FLY_SPEED;
+      fc.movementSpeed = shiftHeldRef.current
+        ? baseSpeed * SHIFT_SLOW_FACTOR
+        : baseSpeed;
     };
-    const down = onKey(true);
-    const up = onKey(false);
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    // Restore base speed on unmount in case shift was held when mode changed.
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key !== "Shift") return;
+      shiftHeldRef.current = true;
+      apply();
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key !== "Shift") return;
+      shiftHeldRef.current = false;
+      apply();
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
     return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      shiftHeldRef.current = false;
       const fc = flyRef.current;
-      if (fc) fc.movementSpeed = BASE_FLY_SPEED;
+      if (fc) fc.movementSpeed = baseSpeed;
     };
-  }, [flyRef]);
+  }, [baseSpeed, flyRef]);
   return null;
 }
 
@@ -178,7 +206,7 @@ export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
               key={`fly-${refitSignal}`}
               ref={flyRef}
               makeDefault
-              movementSpeed={BASE_FLY_SPEED}
+              movementSpeed={1}
               rollSpeed={0.6}
               dragToLook
             />

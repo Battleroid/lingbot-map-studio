@@ -4,6 +4,8 @@ import { useBounds, useGLTF } from "@react-three/drei";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
+import { useViewerStore } from "@/lib/viewerStore";
+
 interface Props {
   url: string;
   wireframe: boolean;
@@ -14,6 +16,16 @@ export function MeshLayer({ url, wireframe }: Props) {
   const scene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
   const bounds = useBounds();
   const hasFittedRef = useRef(false);
+  const setSceneDiagonal = useViewerStore((s) => s.setSceneDiagonal);
+
+  // Record scene diagonal so fly-mode movement speed scales correctly.
+  useEffect(() => {
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const diag = size.length();
+    if (Number.isFinite(diag) && diag > 0) setSceneDiagonal(diag);
+  }, [scene, setSceneDiagonal]);
 
   // Fit once per mount only; partial updates must not disturb the user's
   // orbit. Manual recenter uses the refitSignal path (Canvas.tsx).

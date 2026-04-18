@@ -17,12 +17,13 @@ export function PointCloud({ url, color }: Props) {
   const geometry = useLoader(PLYLoader, url) as THREE.BufferGeometry;
   const pointSize = useViewerStore((s) => s.pointSize);
   const setAutoPointSize = useViewerStore((s) => s.setAutoPointSize);
+  const setSceneDiagonal = useViewerStore((s) => s.setSceneDiagonal);
   const bounds = useBounds();
   const ptsRef = useRef<THREE.Points>(null);
   const hasFittedRef = useRef(false);
 
-  // Compute the auto base point size from the scene bbox. Re-computes on URL
-  // change (e.g. new partial) so the slider multiplier stays meaningful.
+  // Compute the auto base point size + scene diagonal from the bbox. These
+  // drive the point-size slider and the fly-mode movement speed respectively.
   useEffect(() => {
     if (!geometry.boundingBox) geometry.computeBoundingBox();
     const bb = geometry.boundingBox;
@@ -31,9 +32,9 @@ export function PointCloud({ url, color }: Props) {
     bb.getSize(size);
     const diag = size.length();
     if (!Number.isFinite(diag) || diag <= 0) return;
-    // ~0.15% of the scene diagonal → visible from any distance.
+    setSceneDiagonal(diag);
     setAutoPointSize(Math.max(0.0005, Math.min(2, diag * 0.0015)));
-  }, [geometry, setAutoPointSize]);
+  }, [geometry, setAutoPointSize, setSceneDiagonal]);
 
   // Fit the camera ONCE per mount. Subsequent URL changes (incoming partial
   // snapshots) must NOT refit — otherwise it yanks the camera while the user
