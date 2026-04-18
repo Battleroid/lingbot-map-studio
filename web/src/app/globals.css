@@ -166,8 +166,42 @@ hr,
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+  /* Don't let a flex parent squeeze us vertically — prior bug was that
+     with several panels stacked in .job-side (flex-column), they'd all
+     shrink proportionally to fit the viewport and get scrunched.
+     The side column handles overflow-y, so panels take their natural
+     height and scroll. */
+  flex-shrink: 0;
   /* Sit above the dithered chrome without picking up its pattern. */
   z-index: 0;
+}
+
+/* Collapsible panels — click the header to toggle. When collapsed only the
+   header is visible, letting you shrink panels you're not using instead of
+   scrolling to reach the others. */
+.panel[data-collapsed="true"] .panel-body {
+  display: none;
+}
+
+.panel-header[data-collapsible="true"] {
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel-header[data-collapsible="true"]:hover {
+  background: #2a2a2a;
+}
+
+.panel-header .collapse-arrow {
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform 120ms linear;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.panel[data-collapsed="true"] .panel-header .collapse-arrow {
+  transform: rotate(-90deg);
 }
 
 /* Dithered gray texture — classic Mac Finder / Win3.1 50% gray dither.
