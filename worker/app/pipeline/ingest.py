@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Iterable
 
-from app.jobs.schema import JobEvent
+from app.jobs.schema import JobConfig, JobEvent
 
 log = logging.getLogger(__name__)
 
@@ -21,16 +21,12 @@ async def _publish(publish: ProgressFn, event: JobEvent) -> None:
 async def _run_ffmpeg(
     src: Path,
     dst_dir: Path,
-    fps: float,
+    filter_chain: str,
     publish: ProgressFn,
     job_id: str,
     stream_index: int,
     total_streams: int,
 ) -> int:
-    """Extract frames from one video into dst_dir/%06d.png at the requested fps.
-
-    Returns the number of frames extracted.
-    """
     dst_dir.mkdir(parents=True, exist_ok=True)
     pattern = str(dst_dir / "%06d.png")
     cmd = [
@@ -42,7 +38,7 @@ async def _run_ffmpeg(
         "-i",
         str(src),
         "-vf",
-        f"fps={fps}",
+        filter_chain,
         "-vsync",
         "vfr",
         "-start_number",
@@ -54,8 +50,8 @@ async def _run_ffmpeg(
         JobEvent(
             job_id=job_id,
             stage="ingest",
-            message=f"ffmpeg {stream_index + 1}/{total_streams}: {src.name} @ {fps} fps",
-            data={"cmd": " ".join(cmd)},
+            message=f"ffmpeg {stream_index + 1}/{total_streams}: {src.name} [{filter_chain}]",
+            data={"cmd": " ".join(cmd), "filters": filter_chain},
         ),
     )
     proc = await asyncio.create_subprocess_exec(
@@ -71,12 +67,7 @@ async def _run_ffmpeg(
             continue
         await _publish(
             publish,
-            JobEvent(
-                job_id=job_id,
-                stage="ingest",
-                level="stderr",
-                message=line,
-            ),
+            JobEvent(job_id=job_id, stage="ingest", level="stderr", message=line),
         )
     rc = await proc.wait()
     if rc != 0:
@@ -100,16 +91,21 @@ async def concat_videos_to_frames(
     job_id: str,
     sources: Iterable[Path],
     dest: Path,
-    fps: float,
+    config: JobConfig,
     publish: ProgressFn,
 ) -> int:
-    """Extract frames from each video (in order) into a single renumbered folder.
+    """Extract frames from each video into one renumbered folder.
 
-    Result: dest/000000.png, dest/000001.png, ... contiguous across all inputs.
+    Builds an ffmpeg filter chain from config: optional fisheye unwrap (v360),
+    temporal denoise (hqdn3d) + deflicker, then the fps resample. OSD masking
+    runs as a separate pass in Python after all frames are extracted.
     """
+    from app.pipeline.preproc import apply_osd_mask, build_ingest_filters
+
     dest.mkdir(parents=True, exist_ok=True)
     sources = list(sources)
     counter = 0
+    filter_chain = build_ingest_filters(config)
     for i, src in enumerate(sources):
         tmp = dest.parent / f"_stream_{i}"
         if tmp.exists():
@@ -117,7 +113,7 @@ async def concat_videos_to_frames(
                 p.unlink()
         else:
             tmp.mkdir(parents=True, exist_ok=True)
-        await _run_ffmpeg(src, tmp, fps, publish, job_id, i, len(sources))
+        await _run_ffmpeg(src, tmp, filter_chain, publish, job_id, i, len(sources))
         for p in sorted(tmp.iterdir()):
             target = dest / f"{counter:06d}.png"
             p.rename(target)
@@ -134,4 +130,8 @@ async def concat_videos_to_frames(
             progress=1.0,
         ),
     )
+
+    if config.preproc_osd_mask:
+        await apply_osd_mask(job_id, dest, config, publish)
+
     return counter

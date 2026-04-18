@@ -52,6 +52,20 @@ class JobConfig(BaseModel):
     mask_black_bg: bool = False
     mask_white_bg: bool = False
 
+    # --- Preprocessing (applied during ffmpeg ingest / post-extract) ---
+    # Fisheye → rectilinear unwrap. Most FPV cams are ~155-170° in_fov; 90° out
+    # keeps the useful centre and trims the rim where distortion was worst.
+    preproc_fisheye: bool = False
+    fisheye_in_fov: float = 165.0
+    fisheye_out_fov: float = 90.0
+    # Temporal denoise + deflicker — kills analog static and brightness flicker.
+    preproc_denoise: bool = False
+    # Detect static pixels across frames and inpaint them out (OSD/telemetry overlays).
+    preproc_osd_mask: bool = False
+    osd_mask_samples: int = 60
+    osd_mask_std_threshold: float = 5.0
+    osd_mask_dilate: int = 2
+
 
 class Artifact(BaseModel):
     name: str

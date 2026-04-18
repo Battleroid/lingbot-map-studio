@@ -49,6 +49,16 @@ export interface JobConfig {
   show_cam: boolean;
   mask_black_bg: boolean;
   mask_white_bg: boolean;
+
+  // Preprocessing
+  preproc_fisheye: boolean;
+  fisheye_in_fov: number;
+  fisheye_out_fov: number;
+  preproc_denoise: boolean;
+  preproc_osd_mask: boolean;
+  osd_mask_samples: number;
+  osd_mask_std_threshold: number;
+  osd_mask_dilate: number;
 }
 
 export interface JobSummary {
@@ -153,16 +163,40 @@ export const DEFAULT_CONFIG: JobConfig = {
   show_cam: true,
   mask_black_bg: false,
   mask_white_bg: false,
+  preproc_fisheye: false,
+  fisheye_in_fov: 165,
+  fisheye_out_fov: 90,
+  preproc_denoise: false,
+  preproc_osd_mask: false,
+  osd_mask_samples: 60,
+  osd_mask_std_threshold: 5,
+  osd_mask_dilate: 2,
 };
 
 export const PRESETS: Record<string, Partial<JobConfig>> = {
-  "low-fi drone": {
+  "fpv drone": {
     mask_sky: true,
     conf_percentile: 70,
     keyframe_interval: 4,
     num_scale_frames: 4,
     camera_num_iterations: 2,
     mode: "streaming",
+    preproc_denoise: true,
+    preproc_fisheye: true,
+    fisheye_in_fov: 165,
+    fisheye_out_fov: 90,
+    preproc_osd_mask: true,
+  },
+  "low-fi": {
+    mask_sky: true,
+    conf_percentile: 65,
+    keyframe_interval: 4,
+    num_scale_frames: 4,
+    camera_num_iterations: 2,
+    mode: "streaming",
+    preproc_denoise: true,
+    preproc_fisheye: false,
+    preproc_osd_mask: true,
   },
   "high-fi": {
     mask_sky: false,
@@ -171,5 +205,8 @@ export const PRESETS: Record<string, Partial<JobConfig>> = {
     num_scale_frames: 8,
     camera_num_iterations: 4,
     mode: "streaming",
+    preproc_denoise: false,
+    preproc_fisheye: false,
+    preproc_osd_mask: false,
   },
 };

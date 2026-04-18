@@ -34,7 +34,7 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
             job_id=job_id,
             sources=uploads,
             dest=frames_dir,
-            fps=config.fps,
+            config=config,
             publish=_publish,
         )
         await store.update_job(job_id, frames_total=frames_total)

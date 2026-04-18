@@ -43,6 +43,22 @@ const TIPS: Record<string, string> = {
   mask_white_bg:
     "Drop points whose source-image color is pure white (often overexposed sky or greenscreens).",
   fill_preset: "Apply a preset tuned for low-fidelity drone or higher-fidelity source material.",
+  preproc_fisheye:
+    "Unwrap fisheye-lens footage to rectilinear before reconstruction. Most FPV micro cams (2.1-2.5 mm) are 150-170° — leaving them distorted gives the model false geometry. The unwrap crops the rim where distortion was worst.",
+  fisheye_in_fov:
+    "Source lens horizontal FOV in degrees. Measure or look up your cam: Caddx Ratel 2.1 ≈ 165°, RunCam Phoenix 2 ≈ 155°, Foxeer Predator Micro ≈ 160°. Wrong value = skewed geometry.",
+  fisheye_out_fov:
+    "Target diagonal FOV after unwrap. 90° keeps the sharper centre, 110-120° keeps more peripheral content at the cost of residual edge distortion.",
+  preproc_denoise:
+    "Temporal denoise (hqdn3d) + deflicker. Reduces analog static, snow, and per-frame luma jitter from analog FPV feeds. Adds a few seconds to ingest; safe to leave on for any noisy source.",
+  preproc_osd_mask:
+    "Detect pixels that do not change over time (telemetry text, timer, battery, home arrow, station logo) and inpaint them out of every frame before reconstruction. Without this they become false geometry fixed in camera space.",
+  osd_mask_samples:
+    "How many frames to sample when computing the static-pixel mask. More = better detection but slower mask computation.",
+  osd_mask_std_threshold:
+    "Per-pixel standard-deviation cutoff (0-255 scale). Pixels below this are treated as static overlay. 5 is a conservative default; raise to 10-15 for aggressive masking, drop for subtle overlays.",
+  osd_mask_dilate:
+    "Morphological dilation iterations on the mask — grows it outward to catch anti-aliased text edges. 2-3 usually enough.",
 };
 
 function NumberRow({
@@ -286,6 +302,96 @@ export function ConfigPanel({ config, onChange, readOnly, compact, title }: Prop
               max={128}
               readOnly={readOnly}
               onChange={(v) => onChange({ overlap_size: v })}
+            />
+          </>
+        )}
+
+        <div
+          style={{
+            marginTop: 6,
+            paddingTop: 6,
+            borderTop: "1px solid var(--rule)",
+          }}
+        >
+          <div className="section-title">preprocessing</div>
+        </div>
+
+        <BoolRow
+          label="fisheye unwrap"
+          tipKey="preproc_fisheye"
+          value={config.preproc_fisheye}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_fisheye: v })}
+        />
+        {config.preproc_fisheye && (
+          <>
+            <NumberRow
+              label="fisheye in fov"
+              tipKey="fisheye_in_fov"
+              value={config.fisheye_in_fov}
+              step={5}
+              min={60}
+              max={180}
+              readOnly={readOnly}
+              onChange={(v) => onChange({ fisheye_in_fov: v })}
+            />
+            <NumberRow
+              label="fisheye out fov"
+              tipKey="fisheye_out_fov"
+              value={config.fisheye_out_fov}
+              step={5}
+              min={40}
+              max={140}
+              readOnly={readOnly}
+              onChange={(v) => onChange({ fisheye_out_fov: v })}
+            />
+          </>
+        )}
+        <BoolRow
+          label="denoise + deflicker"
+          tipKey="preproc_denoise"
+          value={config.preproc_denoise}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_denoise: v })}
+        />
+        <BoolRow
+          label="mask osd text"
+          tipKey="preproc_osd_mask"
+          value={config.preproc_osd_mask}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_osd_mask: v })}
+        />
+        {!compact && config.preproc_osd_mask && (
+          <>
+            <NumberRow
+              label="osd · samples"
+              tipKey="osd_mask_samples"
+              value={config.osd_mask_samples}
+              step={10}
+              min={10}
+              max={400}
+              readOnly={readOnly}
+              onChange={(v) => onChange({ osd_mask_samples: v })}
+            />
+            <NumberRow
+              label="osd · stddev thr"
+              tipKey="osd_mask_std_threshold"
+              value={config.osd_mask_std_threshold}
+              step={0.5}
+              min={0.5}
+              max={30}
+              readOnly={readOnly}
+              onChange={(v) => onChange({ osd_mask_std_threshold: v })}
+            />
+            <NumberRow
+              label="osd · dilate"
+              tipKey="osd_mask_dilate"
+              value={config.osd_mask_dilate}
+              step={1}
+              min={0}
+              max={10}
+              readOnly={readOnly}
+              onChange={(v) => onChange({ osd_mask_dilate: v })}
             />
           </>
         )}

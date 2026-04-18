@@ -137,12 +137,16 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
         "mode": "windowed" if est_frames > 2500 else "streaming",
     }
     if low_fi:
+        # Low-fi ~ analog FPV drone: assume noise + OSD overlay. Don't auto-enable
+        # fisheye — it's destructive on a non-fisheye source, so make it opt-in.
         patch.update(
             mask_sky=True,
             conf_percentile=65,
             keyframe_interval=4,
             num_scale_frames=4,
             camera_num_iterations=2,
+            preproc_denoise=True,
+            preproc_osd_mask=True,
         )
     else:
         patch.update(
@@ -151,5 +155,7 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
             keyframe_interval=6,
             num_scale_frames=8,
             camera_num_iterations=4,
+            preproc_denoise=False,
+            preproc_osd_mask=False,
         )
     return patch
