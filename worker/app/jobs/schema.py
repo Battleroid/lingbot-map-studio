@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 JobStatus = Literal["queued", "ingest", "inference", "export", "ready", "failed"]
 EventLevel = Literal["info", "warn", "error", "stdout", "stderr", "debug"]
@@ -24,6 +24,8 @@ def _now() -> datetime:
 
 
 class JobConfig(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: str = "lingbot-map"
     mode: Literal["streaming", "windowed"] = "streaming"
     window_size: int = 64

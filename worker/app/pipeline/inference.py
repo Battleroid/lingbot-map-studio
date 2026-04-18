@@ -15,6 +15,8 @@ from app.pipeline.progress import capture_stdio
 log = logging.getLogger(__name__)
 
 # lingbot-map wants a large GPU memory arena; set before first CUDA init.
+# PYTORCH_ALLOC_CONF is the current name; keep the legacy one for older builds.
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 PublishFn = Callable[[JobEvent], "asyncio.Future | None"]
