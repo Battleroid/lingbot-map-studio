@@ -126,6 +126,12 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
     target_fps = min(20.0, src_fps)
 
     total_duration = sum(p.get("duration_s") or 0.0 for p in probes)
+    est_frames_20fps = int(round(target_fps * total_duration))
+    # Cap total reconstruction frames at ~500 for streaming mode to stay
+    # within ~20 GB VRAM headroom. Longer clips drop the sampling rate.
+    if est_frames_20fps > 500 and total_duration > 0:
+        target_fps = max(2.0, 500.0 / total_duration)
+
     est_frames = int(round(target_fps * total_duration))
 
     max_height = max((p.get("height") or 0) for p in probes)
@@ -133,9 +139,13 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
 
     low_fi = max_height <= 720 or (max_bitrate and max_bitrate < 8_000_000)
 
+    # Streaming mode's KV cache grows with keyframe count. Switch to windowed
+    # for anything beyond ~300 frames so peak memory stays roughly flat.
+    mode = "windowed" if est_frames > 300 else "streaming"
+
     patch: dict[str, Any] = {
         "fps": round(target_fps, 2),
-        "mode": "windowed" if est_frames > 2500 else "streaming",
+        "mode": mode,
     }
     if low_fi:
         # Low-fi ~ analog FPV drone: assume noise + OSD overlay. Don't auto-enable

@@ -159,10 +159,10 @@ export const DEFAULT_CONFIG: JobConfig = {
   mask_sky: true,
   conf_percentile: 50,
   keyframe_interval: 6,
-  num_scale_frames: 8,
+  num_scale_frames: 4,
   camera_num_iterations: 4,
   max_frame_num: 1024,
-  kv_cache_sliding_window: 64,
+  kv_cache_sliding_window: 32,
   enable_3d_rope: true,
   use_sdpa: true,
   offload_to_cpu: true,
@@ -183,6 +183,23 @@ export const DEFAULT_CONFIG: JobConfig = {
 };
 
 export const PRESETS: Record<string, Partial<JobConfig>> = {
+  "low-mem": {
+    // Aggressive VRAM reduction — for longer clips (>15 s @ 720p) or cards
+    // with <=16 GB. Uses windowed mode + tiny windows + small image_size.
+    mode: "windowed",
+    window_size: 32,
+    overlap_size: 8,
+    image_size: 384,
+    fps: 10,
+    num_scale_frames: 2,
+    keyframe_interval: 6,
+    kv_cache_sliding_window: 16,
+    camera_num_iterations: 2,
+    offload_to_cpu: true,
+    use_sdpa: true,
+    mask_sky: true,
+    conf_percentile: 65,
+  },
   "fpv drone": {
     mask_sky: true,
     conf_percentile: 70,
@@ -211,7 +228,7 @@ export const PRESETS: Record<string, Partial<JobConfig>> = {
     mask_sky: false,
     conf_percentile: 35,
     keyframe_interval: 6,
-    num_scale_frames: 8,
+    num_scale_frames: 6,
     camera_num_iterations: 4,
     mode: "streaming",
     preproc_denoise: false,

@@ -42,11 +42,14 @@ class JobConfig(BaseModel):
     # stricter filter (fewer, more-confident points). lingbot-map's default is 50.
     conf_percentile: float = 50.0
     keyframe_interval: int = 6
-    # Matches gct_stream constructor kv_cache_scale_frames (default 8).
-    num_scale_frames: int = 8
+    # Frames used in the initial batched scale-anchor pass. Lower = lower
+    # peak VRAM for the first forward call; 4 is a safe default on 20-24 GB.
+    num_scale_frames: int = 4
     camera_num_iterations: int = 4
     max_frame_num: int = 1024
-    kv_cache_sliding_window: int = 64
+    # KV cache is trimmed once keyframe count exceeds this. Lower values
+    # trade a bit of global context for much flatter memory over long runs.
+    kv_cache_sliding_window: int = 32
     enable_3d_rope: bool = True
     use_sdpa: bool = True
     offload_to_cpu: bool = True

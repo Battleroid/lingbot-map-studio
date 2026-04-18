@@ -12,6 +12,10 @@ interface Props {
 }
 
 const TIPS: Record<string, string> = {
+  image_size:
+    "Input resolution the model operates at. The patch size is 14, so values must be divisible by 14 — common picks are 518 (default, paper), 448, 392, 336. Lower values cut VRAM roughly quadratically at the cost of detail.",
+  kv_cache_sliding_window:
+    "Number of keyframes kept in the attention KV cache. Once this many keyframes accumulate, the oldest are evicted. Lower = lower steady-state VRAM but less long-range context. 16-32 is safe; 64+ can OOM on longer clips.",
   model_id:
     "Which lingbot-map checkpoint to use.\n• lingbot-map: balanced, ~4.6 GB (default).\n• long: tuned for long sequences.\n• stage1: can be loaded into a VGGT base.",
   mode:
@@ -233,6 +237,26 @@ export function ConfigPanel({ config, onChange, readOnly, compact, title }: Prop
           max={16}
           readOnly={readOnly}
           onChange={(v) => onChange({ num_scale_frames: v })}
+        />
+        <NumberRow
+          label="kv cache window"
+          tipKey="kv_cache_sliding_window"
+          value={config.kv_cache_sliding_window}
+          step={8}
+          min={8}
+          max={256}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ kv_cache_sliding_window: v })}
+        />
+        <NumberRow
+          label="image size"
+          tipKey="image_size"
+          value={config.image_size}
+          step={14}
+          min={224}
+          max={700}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ image_size: v })}
         />
         <NumberRow
           label="camera iters"

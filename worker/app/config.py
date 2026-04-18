@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     # Watchdog poll interval and default soft-limit used when a job doesn't
     # supply its own cap. In GB.
     vram_watchdog_interval_s: float = 2.0
-    vram_default_soft_limit_gb: float = 22.0
+    # Soft limit set below the hard process cap (~0.85 × 24 = 20.4 GB) so the
+    # watchdog can abort with a friendly message *before* PyTorch raises
+    # torch.cuda.OutOfMemoryError.
+    vram_default_soft_limit_gb: float = 19.0
 
     model_config = SettingsConfigDict(env_file=None, case_sensitive=False)
 

@@ -156,8 +156,12 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
             status="failed",
             error=(
                 f"vram watchdog aborted the job: {exc}\n\n"
-                "raise vram_soft_limit_gb or drop fps / keyframe_interval / "
-                "num_scale_frames and try again."
+                "try one of these:\n"
+                "  · apply the 'low-mem' preset\n"
+                "  · set mode=windowed (smaller window_size)\n"
+                "  · drop num_scale_frames to 2\n"
+                "  · drop fps to ~10\n"
+                "  · lower image_size to 384"
             ),
         )
         await _publish(
@@ -168,6 +172,39 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 message=f"aborted: {exc}",
             )
         )
+    except Exception as exc:  # noqa: BLE001
+        # Intercept CUDA OOM specifically so the user sees actionable advice
+        # instead of a raw 60-line stack trace.
+        is_cuda_oom = (
+            type(exc).__name__ == "OutOfMemoryError"
+            or ("CUDA out of memory" in str(exc))
+        )
+        if is_cuda_oom:
+            log.warning("job %s failed with CUDA OOM", job_id)
+            await store.update_job(
+                job_id,
+                status="failed",
+                error=(
+                    "CUDA out of memory during inference.\n\n"
+                    "the sequence is too long for streaming mode at current "
+                    "settings. try in this order:\n"
+                    "  1. apply the 'low-mem' preset (mode=windowed, num_scale_frames=2, image_size=384)\n"
+                    "  2. or set mode=windowed, window_size=32, overlap_size=8 manually\n"
+                    "  3. or drop fps to 10 to reduce total frame count\n"
+                    "  4. or lower num_scale_frames to 2 and kv_cache_sliding_window to 16\n\n"
+                    f"raw error: {exc}"
+                ),
+            )
+            await _publish(
+                JobEvent(
+                    job_id=job_id,
+                    stage="system",
+                    level="error",
+                    message="CUDA OOM — see job error for suggested fixes",
+                )
+            )
+        else:
+            raise
     except Exception as exc:  # noqa: BLE001
         log.exception("job %s failed", job_id)
         tb = traceback.format_exc()
