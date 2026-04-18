@@ -45,7 +45,7 @@ export function JobList() {
           </div>
         )}
         {data && data.length > 0 && (
-          <table className="grid">
+          <table className="dtable">
             <colgroup>
               <col style={{ width: "130px" }} />
               <col style={{ width: "110px" }} />

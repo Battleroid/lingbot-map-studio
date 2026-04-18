@@ -49,7 +49,7 @@ export function ProbePanel({ draft }: { draft: DraftRecord }) {
         </span>
       </div>
       <div className="panel-body" style={{ padding: 0 }}>
-        <table className="grid">
+        <table className="dtable">
           <colgroup>
             <col style={{ width: "36px" }} />
             <col />

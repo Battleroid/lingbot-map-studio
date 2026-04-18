@@ -364,7 +364,7 @@ hr,
   color: var(--bg);
 }
 
-table.grid {
+table.dtable {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-sm);
@@ -372,8 +372,8 @@ table.grid {
   font-variant-numeric: tabular-nums;
 }
 
-table.grid th,
-table.grid td {
+table.dtable th,
+table.dtable td {
   text-align: left;
   padding: 5px 8px;
   border-bottom: 1px solid var(--rule);
@@ -386,7 +386,7 @@ table.grid td {
   text-overflow: ellipsis;
 }
 
-table.grid th {
+table.dtable th {
   text-transform: uppercase;
   font-size: var(--fs-xs);
   letter-spacing: 0.06em;
@@ -397,21 +397,21 @@ table.grid th {
 }
 
 /* Allow designated cells to wrap/break for long filenames etc. */
-table.grid td.wrap,
-table.grid th.wrap {
+table.dtable td.wrap,
+table.dtable th.wrap {
   white-space: normal;
   word-break: break-all;
   overflow: visible;
   text-overflow: clip;
 }
 
-table.grid td.num,
-table.grid th.num {
+table.dtable td.num,
+table.dtable th.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-table.grid tr:last-child td {
+table.dtable tr:last-child td {
   border-bottom: none;
 }
 

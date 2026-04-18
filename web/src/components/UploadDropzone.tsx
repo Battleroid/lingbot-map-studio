@@ -58,7 +58,7 @@ export function UploadDropzone({ files, onChange, disabled }: Props) {
         />
       </div>
       {files.length > 0 && (
-        <table className="grid" style={{ marginTop: 10 }}>
+        <table className="dtable" style={{ marginTop: 10 }}>
           <colgroup>
             <col style={{ width: "32px" }} />
             <col />
