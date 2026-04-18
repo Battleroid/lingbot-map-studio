@@ -90,10 +90,16 @@ function FlySpeedModifier({
   flyRef: React.RefObject<FlyControlsImpl | null>;
 }) {
   const sceneDiagonal = useViewerStore((s) => s.sceneDiagonal);
+  const pathDiagonal = useViewerStore((s) => s.pathDiagonal);
   const flySpeedMult = useViewerStore((s) => s.flySpeedMult);
   const shiftHeldRef = useRef(false);
 
-  const baseSpeed = Math.max(0.05, sceneDiagonal * BASE_SPEED_PER_DIAG * flySpeedMult);
+  // Use the LARGER of point-cloud and camera-path extents — FPV-style
+  // reconstructions often have a camera flight wider than the visible
+  // points, and scaling speed only to the tight point cluster makes
+  // traversing the flight path painful.
+  const effectiveDiag = Math.max(sceneDiagonal, pathDiagonal);
+  const baseSpeed = Math.max(0.05, effectiveDiag * BASE_SPEED_PER_DIAG * flySpeedMult);
 
   // Apply whenever base speed changes (scene diagonal updated, multiplier
   // changed, or controls remounted on refit).
@@ -180,13 +186,16 @@ export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
             {showPoints && plyUrl && (
               <PointCloud url={plyUrl} color={mode === "points-color"} />
             )}
+            {/* Camera path lives INSIDE Bounds so the initial fit includes
+                both the reconstructed points and the camera trajectory —
+                otherwise tight-clustered points hide a wide-flight path. */}
+            {cameraPath && cameraPath.poses.length > 1 && (
+              <CameraPath
+                poses={cameraPath.poses}
+                recordedFps={cameraPath.fps || 10}
+              />
+            )}
           </Bounds>
-          {cameraPath && cameraPath.poses.length > 1 && (
-            <CameraPath
-              poses={cameraPath.poses}
-              recordedFps={cameraPath.fps || 10}
-            />
-          )}
           {showMesh && glbUrl && lassoActive && <LassoSelect />}
         </Suspense>
         {cameraMode === "orbit" ? (

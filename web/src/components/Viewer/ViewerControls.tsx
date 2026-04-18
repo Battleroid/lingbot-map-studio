@@ -49,6 +49,14 @@ export function ViewerControls({ pathPoseCount = 0 }: Props) {
   const setPlaybackSpeed = useViewerStore((s) => s.setPlaybackSpeed);
   const flySpeedMult = useViewerStore((s) => s.flySpeedMult);
   const setFlySpeedMult = useViewerStore((s) => s.setFlySpeedMult);
+  const sceneDiagonal = useViewerStore((s) => s.sceneDiagonal);
+  const pathDiagonal = useViewerStore((s) => s.pathDiagonal);
+
+  // Ratio of camera-path span to point-cloud span. >>1 means cameras are
+  // spread much wider than the visible scene — a classic monocular scale
+  // issue worth surfacing so the user isn't confused by apparent scale.
+  const scaleRatio =
+    sceneDiagonal > 0 && pathDiagonal > 0 ? pathDiagonal / sceneDiagonal : 0;
 
   const canUndo = meshHistoryIndex >= 0;
   const canRedo = meshHistoryIndex < meshHistory.length - 1;
@@ -161,6 +169,23 @@ export function ViewerControls({ pathPoseCount = 0 }: Props) {
             {cameraMode === "fly" ? "fly" : "orbit"}
           </button>
         </Tip>
+        {scaleRatio >= 5 && (
+          <Tip
+            text={`Camera-path span (${pathDiagonal.toFixed(1)}) is ${scaleRatio.toFixed(1)}× the point-cloud span (${sceneDiagonal.toFixed(1)}). Monocular reconstruction can put cameras wider than visible geometry — the scene will look small at the viewer's default zoom. Use recenter to frame everything.`}
+            showIcon={false}
+          >
+            <span
+              className="mono-small"
+              style={{
+                color: "var(--danger)",
+                padding: "1px 6px",
+                border: "1px solid var(--danger)",
+              }}
+            >
+              scale ratio {scaleRatio.toFixed(1)}×
+            </span>
+          </Tip>
+        )}
         {cameraMode === "fly" && (
           <Tip
             text="Fly-mode speed multiplier. 1× traverses the scene in ~5 s at full key hold. Shift while holding any movement key temporarily slows to ~12% for precise positioning."

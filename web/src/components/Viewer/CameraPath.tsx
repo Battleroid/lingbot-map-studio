@@ -41,6 +41,7 @@ export function CameraPath({ poses, recordedFps }: Props) {
   const playbackSpeed = useViewerStore((s) => s.playbackSpeed);
   const setPlaybackFrame = useViewerStore((s) => s.setPlaybackFrame);
   const setPlaying = useViewerStore((s) => s.setPlaying);
+  const setPathDiagonal = useViewerStore((s) => s.setPathDiagonal);
   const camera = useThree((s) => s.camera);
 
   const positions = useMemo(
@@ -51,14 +52,23 @@ export function CameraPath({ poses, recordedFps }: Props) {
     [poses],
   );
 
-  // Scene-relative marker size so the arrow is visible at any scale.
-  const markerSize = useMemo(() => {
-    if (positions.length < 2) return 0.05;
+  // Scene-relative marker size + publish the path's bbox diagonal so fly
+  // speed scales correctly when cameras span a larger volume than points.
+  const { markerSize, pathDiag } = useMemo(() => {
+    if (positions.length < 2) return { markerSize: 0.05, pathDiag: 0 };
     const box = new THREE.Box3().setFromPoints(positions);
     const size = new THREE.Vector3();
     box.getSize(size);
-    return Math.max(0.02, size.length() * 0.015);
+    const d = size.length();
+    return {
+      markerSize: Math.max(0.02, d * 0.015),
+      pathDiag: Number.isFinite(d) && d > 0 ? d : 0,
+    };
   }, [positions]);
+
+  useEffect(() => {
+    setPathDiagonal(pathDiag);
+  }, [pathDiag, setPathDiagonal]);
 
   useFrame((_state, delta) => {
     if (!playing || poses.length < 2) return;
