@@ -188,7 +188,7 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                     "CUDA out of memory during inference.\n\n"
                     "the sequence is too long for streaming mode at current "
                     "settings. try in this order:\n"
-                    "  1. apply the 'low-mem' preset (mode=windowed, num_scale_frames=2, image_size=384)\n"
+                    "  1. apply the 'low-mem' preset\n"
                     "  2. or set mode=windowed, window_size=32, overlap_size=8 manually\n"
                     "  3. or drop fps to 10 to reduce total frame count\n"
                     "  4. or lower num_scale_frames to 2 and kv_cache_sliding_window to 16\n\n"
@@ -204,7 +204,25 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 )
             )
         else:
-            raise
+            # Any other exception: log and mark failed with the full traceback
+            # so the UI shows it instead of silently leaving the job in
+            # whatever status it was when it crashed.
+            log.exception("job %s failed", job_id)
+            tb = traceback.format_exc()
+            await store.update_job(
+                job_id,
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}\n\n{tb}",
+            )
+            await _publish(
+                JobEvent(
+                    job_id=job_id,
+                    stage="system",
+                    level="error",
+                    message=f"job failed: {exc}",
+                    data={"traceback": tb},
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         log.exception("job %s failed", job_id)
         tb = traceback.format_exc()

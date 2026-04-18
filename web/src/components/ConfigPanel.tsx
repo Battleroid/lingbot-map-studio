@@ -13,7 +13,7 @@ interface Props {
 
 const TIPS: Record<string, string> = {
   image_size:
-    "Input resolution the model operates at. The patch size is 14, so values must be divisible by 14 — common picks are 518 (default, paper), 448, 392, 336. Lower values cut VRAM roughly quadratically at the cost of detail.",
+    "Input resolution the model operates at. ⚠️ Keep this at 518 — the pretrained DINOv2 position embeddings are fixed to a 37×37 token grid (518/14). Changing this value will crash with a state_dict size-mismatch. Use windowed mode + smaller window_size for VRAM relief instead.",
   kv_cache_sliding_window:
     "Number of keyframes kept in the attention KV cache. Once this many keyframes accumulate, the oldest are evicted. Lower = lower steady-state VRAM but less long-range context. 16-32 is safe; 64+ can OOM on longer clips.",
   model_id:

@@ -184,13 +184,15 @@ export const DEFAULT_CONFIG: JobConfig = {
 
 export const PRESETS: Record<string, Partial<JobConfig>> = {
   "low-mem": {
-    // Aggressive VRAM reduction — for longer clips (>15 s @ 720p) or cards
-    // with <=16 GB. Uses windowed mode + tiny windows + small image_size.
+    // Aggressive VRAM reduction — for longer clips or smaller cards.
+    // NOTE: image_size stays at 518 because the pretrained checkpoint's
+    // positional embeddings are fixed to that grid (518/14 = 37×37 tokens).
+    // Memory savings come from windowed mode + small window + dropped fps.
     mode: "windowed",
     window_size: 32,
     overlap_size: 8,
-    image_size: 384,
-    fps: 10,
+    image_size: 518,
+    fps: 8,
     num_scale_frames: 2,
     keyframe_interval: 6,
     kv_cache_sliding_window: 16,
