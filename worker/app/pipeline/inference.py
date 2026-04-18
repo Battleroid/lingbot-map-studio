@@ -119,7 +119,6 @@ def _write_partial_ply(
     c = wpc[0].reshape(-1).float().numpy()
     colors_arr = (imgs[0].reshape(-1, 3).float().numpy() * 255).clip(0, 255).astype(np.uint8)
 
-    # Guard against degenerate cases early in inference.
     if c.size < 3:
         return 0, 0
     pct = max(0.0, min(99.0, float(conf_percentile)))
@@ -130,10 +129,22 @@ def _write_partial_ply(
     if kept == 0:
         return 0, skipped
 
-    pc = trimesh.PointCloud(vertices=pts[mask], colors=colors_arr[mask])
+    pts_m = pts[mask]
+    cols_m = colors_arr[mask]
+
+    # Cap partial snapshots at ~500k points so the browser can render them
+    # comfortably. The final reconstruction.ply isn't subject to this cap.
+    PARTIAL_MAX = 500_000
+    if pts_m.shape[0] > PARTIAL_MAX:
+        # Deterministic stride keeps spatial distribution while staying fast.
+        step = int(pts_m.shape[0] // PARTIAL_MAX) + 1
+        pts_m = pts_m[::step]
+        cols_m = cols_m[::step]
+
+    pc = trimesh.PointCloud(vertices=pts_m, colors=cols_m)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pc.export(str(out_path))
-    return kept, skipped
+    return int(pts_m.shape[0]), skipped
 
 
 def _run_inference_sync(

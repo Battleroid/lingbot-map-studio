@@ -87,12 +87,15 @@ export function ExportMenu({ jobId, artifacts, latestMesh, onReexport }: Props) 
               key={a.name}
               href={artifactUrl(jobId, a.name)}
               download={a.name}
+              title={a.name}
               style={{
                 fontSize: "var(--fs-xs)",
                 display: "flex",
                 justifyContent: "space-between",
+                alignItems: "center",
                 gap: 8,
                 padding: "2px 4px",
+                minWidth: 0,
                 textDecoration: "none",
                 border:
                   latestMesh === a.name
@@ -100,8 +103,20 @@ export function ExportMenu({ jobId, artifacts, latestMesh, onReexport }: Props) 
                     : "1px solid transparent",
               }}
             >
-              <span style={{ wordBreak: "break-all" }}>{a.name}</span>
-              <span style={{ color: "var(--muted)" }}>{humanSize(a.size)}</span>
+              <span
+                style={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {a.name}
+              </span>
+              <span style={{ color: "var(--muted)", flex: "0 0 auto" }}>
+                {humanSize(a.size)}
+              </span>
             </a>
           ))}
         </div>

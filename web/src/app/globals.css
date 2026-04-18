@@ -160,6 +160,12 @@ hr,
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Prevent long content (filenames, buttons, inputs) from bursting the panel
+     wider than its grid/flex column. Without this the whole panel can grow
+     beyond the side pane, overlapping the viewer. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   /* Sit above the dithered chrome without picking up its pattern. */
   z-index: 0;
 }
@@ -216,6 +222,53 @@ hr,
   padding: var(--pad);
   font-size: var(--fs-sm);
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Hard-clamp every descendant to never force its parent wider. Only
+   max-width is set — layout/flow is unaffected for anything that already
+   sizes itself correctly. */
+.panel-body > *,
+.panel-body .stat,
+.panel-body label,
+.panel-body a,
+.panel-body button,
+.panel-body input,
+.panel-body select,
+.panel-body textarea,
+.panel-body table {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.panel-body input[type="number"],
+.panel-body input[type="text"],
+.panel-body select {
+  /* Shrink to container instead of browser default ~150px. */
+  width: 100%;
+  min-width: 0;
+}
+
+/* Re-override the width for .stat inputs so they stay compact on the right. */
+.panel-body .stat input,
+.panel-body .stat select {
+  width: 90px;
+}
+
+.panel-body .stat input[type="checkbox"] {
+  width: auto;
+}
+
+.panel-body button {
+  /* Buttons that sit on their own row inside grid/flex should not push the
+     panel wider when their label is long. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-body.dense {
@@ -264,19 +317,36 @@ hr,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 2px 0;
   font-size: var(--fs-sm);
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
 }
 
-.stat > span:first-child {
+.stat > span:first-child,
+.stat > label:first-child,
+.stat > .tip-target:first-child {
   color: var(--muted);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stat input,
 .stat select {
-  min-width: 80px;
+  flex: 0 0 auto;
+  width: 96px;
+  min-width: 0;
+  max-width: 50%;
   text-align: right;
+}
+
+.stat input[type="checkbox"] {
+  width: auto;
 }
 
 /* Log pane */
@@ -428,6 +498,15 @@ table.dtable tr:last-child td {
   align-items: center;
   gap: 4px;
   cursor: help;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.tip-target > span:not(.tip-icon) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tip-target::after {
@@ -575,12 +654,14 @@ table.dtable tr:last-child td {
 
 .job-side {
   overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid var(--rule);
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  min-width: 0;
   background-color: #e8e8e8;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
   background-size: 4px 4px;

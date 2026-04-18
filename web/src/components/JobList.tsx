@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useJobList } from "@/hooks/useJob";
+import { deleteJob } from "@/lib/api";
 
 /**
  * Relative time, tolerant of client/server clock drift.
@@ -50,6 +53,31 @@ function absTime(iso: string): string {
 
 export function JobList() {
   const { data, error, isLoading } = useJobList();
+  const qc = useQueryClient();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
+  async function onDelete(id: string) {
+    if (
+      !window.confirm(
+        `Delete job ${id}? All artifacts and uploads will be removed from disk.`,
+      )
+    ) {
+      return;
+    }
+    setBusyId(id);
+    setActionErr(null);
+    try {
+      await deleteJob(id);
+      // Invalidate so the list refreshes without the deleted row.
+      await qc.invalidateQueries({ queryKey: ["jobs"] });
+    } catch (e) {
+      setActionErr(String((e as Error).message));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -84,6 +112,7 @@ export function JobList() {
               <col style={{ width: "80px" }} />
               <col style={{ width: "90px" }} />
               <col />
+              <col style={{ width: "70px" }} />
               <col style={{ width: "80px" }} />
             </colgroup>
             <thead>
@@ -94,29 +123,62 @@ export function JobList() {
                 <th className="num">artifacts</th>
                 <th>created</th>
                 <th></th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {data.map((j) => (
-                <tr key={j.id}>
-                  <td>{j.id}</td>
-                  <td>
-                    <span className="chip" data-status={j.status}>
-                      {j.status}
-                    </span>
-                  </td>
-                  <td className="num">{j.frames_total ?? "—"}</td>
-                  <td className="num">{j.artifact_count}</td>
-                  <td className="mono-small" title={absTime(j.created_at)}>
-                    {relTime(j.created_at)}
-                  </td>
-                  <td>
-                    <Link href={`/jobs/${j.id}`}>open</Link>
-                  </td>
-                </tr>
-              ))}
+              {data.map((j) => {
+                const terminal =
+                  j.status === "ready" ||
+                  j.status === "failed" ||
+                  j.status === "cancelled";
+                return (
+                  <tr key={j.id}>
+                    <td>{j.id}</td>
+                    <td>
+                      <span className="chip" data-status={j.status}>
+                        {j.status}
+                      </span>
+                    </td>
+                    <td className="num">{j.frames_total ?? "—"}</td>
+                    <td className="num">{j.artifact_count}</td>
+                    <td className="mono-small" title={absTime(j.created_at)}>
+                      {relTime(j.created_at)}
+                    </td>
+                    <td>
+                      <Link href={`/jobs/${j.id}`}>open</Link>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        disabled={!terminal || busyId === j.id}
+                        onClick={() => onDelete(j.id)}
+                        title={
+                          terminal
+                            ? "Delete job and its artifacts"
+                            : "Stop the job first"
+                        }
+                        style={{ padding: "1px 6px" }}
+                      >
+                        {busyId === j.id ? "…" : "delete"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+        )}
+        {actionErr && (
+          <div
+            style={{
+              padding: "6px var(--pad)",
+              color: "var(--danger)",
+              fontSize: "var(--fs-xs)",
+            }}
+          >
+            {actionErr}
+          </div>
         )}
       </div>
     </div>

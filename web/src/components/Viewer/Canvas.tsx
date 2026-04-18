@@ -1,8 +1,8 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { Bounds, Grid, OrbitControls } from "@react-three/drei";
-import { Suspense, useMemo, useRef } from "react";
+import { Bounds, Grid, OrbitControls, useBounds } from "@react-three/drei";
+import { Suspense, useEffect, useMemo, useRef } from "react";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 import { LassoSelect } from "./LassoSelect";
@@ -31,6 +31,39 @@ function AxesAndGrid() {
   );
 }
 
+/**
+ * Sits inside <Bounds> and triggers a refresh+fit whenever:
+ *   - the active URL(s) change (new geometry loaded)
+ *   - the user clicks "recenter" (refitSignal ticks up)
+ *   - the render mode changes (different layer becomes visible)
+ *
+ * Without this, drei's Bounds only fits once on mount; Suspense-resolved
+ * children that arrive late don't trigger a refit, which is why opening a
+ * completed job or receiving a new partial PLY could look empty.
+ */
+function RefitController({
+  urlKey,
+  mode,
+}: {
+  urlKey: string;
+  mode: string;
+}) {
+  const bounds = useBounds();
+  const signal = useViewerStore((s) => s.refitSignal);
+  useEffect(() => {
+    // Defer to next animation frame so Bounds sees the newly-added meshes.
+    const id = requestAnimationFrame(() => {
+      try {
+        bounds.refresh().clip().fit();
+      } catch {
+        /* Bounds may not be ready yet on very first render */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [bounds, urlKey, mode, signal]);
+  return null;
+}
+
 export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
   const mode = useViewerStore((s) => s.mode);
   const lassoActive = useViewerStore((s) => s.lassoActive);
@@ -39,12 +72,15 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
   const showPoints = mode === "points" || mode === "points-color";
   const showMesh = mode === "mesh" || mode === "wireframe";
 
-  // Bounds keys include the active URL so that when a new partial PLY lands,
-  // Bounds remounts and refits the camera to the new geometry.
-  const boundsKey = `${showMesh ? glbUrl ?? "" : ""}|${showPoints ? plyUrl ?? "" : ""}|${mode}`;
+  const urlKey = `${showMesh ? glbUrl ?? "" : ""}|${showPoints ? plyUrl ?? "" : ""}`;
 
   const cameraProps = useMemo(
-    () => ({ position: [2.5, 2.5, 2.5] as [number, number, number], fov: 45, near: 0.01, far: 5000 }),
+    () => ({
+      position: [2.5, 2.5, 2.5] as [number, number, number],
+      fov: 45,
+      near: 0.001,
+      far: 10000,
+    }),
     [],
   );
 
@@ -56,7 +92,8 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
         <directionalLight position={[5, 8, 3]} intensity={0.9} />
         <Suspense fallback={null}>
           <AxesAndGrid />
-          <Bounds key={boundsKey} fit clip observe margin={1.3}>
+          <Bounds fit clip observe margin={1.3}>
+            <RefitController urlKey={urlKey} mode={mode} />
             {showMesh && glbUrl && (
               <MeshLayer url={glbUrl} wireframe={mode === "wireframe"} />
             )}

@@ -21,12 +21,13 @@ const MODES: { value: RenderMode; label: string; tip: string }[] = [
 export function ViewerControls() {
   const mode = useViewerStore((s) => s.mode);
   const setMode = useViewerStore((s) => s.setMode);
-  const pointSize = useViewerStore((s) => s.pointSize);
-  const setPointSize = useViewerStore((s) => s.setPointSize);
+  const pointSizeScale = useViewerStore((s) => s.pointSizeScale);
+  const setPointSizeScale = useViewerStore((s) => s.setPointSizeScale);
   const lassoActive = useViewerStore((s) => s.lassoActive);
   const setLassoActive = useViewerStore((s) => s.setLassoActive);
   const selection = useViewerStore((s) => s.selection);
   const clearSelection = useViewerStore((s) => s.clearSelection);
+  const requestRefit = useViewerStore((s) => s.requestRefit);
 
   return (
     <div
@@ -61,17 +62,24 @@ export function ViewerControls() {
           fontSize: "var(--fs-xs)",
         }}
       >
-        <Tip text="Size of rendered points when a point-cloud mode is active. Lower = crisper, higher = filling gaps.">
-          <span style={{ color: "var(--muted)" }}>pt size</span>
+        <Tip text="Multiplier on the auto-computed point size (derived from the scene's bounding box). 0.25× = crisper, 4× = filling gaps. The absolute size rescales automatically when you open a scene with a different extent.">
+          <span style={{ color: "var(--muted)" }}>pt ×</span>
         </Tip>
         <input
           type="range"
-          min={0.0005}
-          max={2}
-          step={0.001}
-          value={pointSize}
-          onChange={(e) => setPointSize(Number(e.target.value))}
+          min={0.25}
+          max={4}
+          step={0.05}
+          value={pointSizeScale}
+          onChange={(e) => setPointSizeScale(Number(e.target.value))}
+          style={{ width: 120 }}
         />
+        <span
+          className="mono-small"
+          style={{ minWidth: 38, textAlign: "right" }}
+        >
+          {pointSizeScale.toFixed(2)}×
+        </span>
       </div>
       <div
         style={{
@@ -81,6 +89,14 @@ export function ViewerControls() {
           alignItems: "center",
         }}
       >
+        <Tip
+          text="Reframe the camera on the current geometry. Use when the reconstruction drifts out of view or after lassoing / editing."
+          showIcon={false}
+        >
+          <button type="button" onClick={requestRefit}>
+            recenter
+          </button>
+        </Tip>
         <Tip text="Hold and drag to draw a polygon. Faces whose centroids land inside are selected for mesh-tool operations.">
           <button
             type="button"

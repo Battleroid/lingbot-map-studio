@@ -1,7 +1,7 @@
 "use client";
 
-import { useGLTF } from "@react-three/drei";
-import { useEffect, useMemo } from "react";
+import { useBounds, useGLTF } from "@react-three/drei";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 interface Props {
@@ -12,6 +12,23 @@ interface Props {
 export function MeshLayer({ url, wireframe }: Props) {
   const gltf = useGLTF(url, true);
   const scene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+  const bounds = useBounds();
+  const hasFittedRef = useRef(false);
+
+  // Fit once per mount only; partial updates must not disturb the user's
+  // orbit. Manual recenter uses the refitSignal path (Canvas.tsx).
+  useEffect(() => {
+    if (hasFittedRef.current) return;
+    hasFittedRef.current = true;
+    const id = requestAnimationFrame(() => {
+      try {
+        bounds.refresh().clip().fit();
+      } catch {
+        hasFittedRef.current = false;
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [bounds, scene]);
 
   useEffect(() => {
     scene.traverse((obj) => {
