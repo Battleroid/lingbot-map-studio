@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { CompareSlider } from "@/components/CompareSlider";
 import { fisheyePreviewUrl, osdPreviewUrl } from "@/lib/api";
 import type { JobConfig } from "@/lib/types";
 
@@ -10,10 +11,6 @@ interface Props {
   config: JobConfig;
 }
 
-/**
- * Debounce a changing value. Used to avoid firing a preview rerender on every
- * keystroke while dragging a slider.
- */
 function useDebounced<T>(value: T, ms = 400): T {
   const [v, setV] = useState(value);
   useEffect(() => {
@@ -23,14 +20,14 @@ function useDebounced<T>(value: T, ms = 400): T {
   return v;
 }
 
-function LoadingImg({
+function PreviewTile({
   src,
-  alt,
   label,
+  alt,
 }: {
   src: string;
-  alt: string;
   label: string;
+  alt: string;
 }) {
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -42,7 +39,7 @@ function LoadingImg({
     <div
       style={{
         border: "1px solid var(--rule)",
-        background: "var(--bg)",
+        background: "#0b0b0b",
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
@@ -52,7 +49,7 @@ function LoadingImg({
         style={{
           background: "var(--fg)",
           color: "var(--bg)",
-          padding: "2px 8px",
+          padding: "3px 8px",
           fontSize: "var(--fs-xs)",
           textTransform: "uppercase",
           letterSpacing: "0.08em",
@@ -61,14 +58,14 @@ function LoadingImg({
         }}
       >
         <span>{label}</span>
-        {!loaded && !err && <span style={{ opacity: 0.7 }}>rendering...</span>}
+        {!loaded && !err && <span style={{ opacity: 0.7 }}>rendering…</span>}
         {err && <span style={{ color: "var(--bg)", opacity: 0.9 }}>error</span>}
       </div>
       <div
         style={{
           position: "relative",
           aspectRatio: "16 / 9",
-          background: "var(--soft)",
+          background: "#0b0b0b",
           overflow: "hidden",
         }}
       >
@@ -96,7 +93,7 @@ function LoadingImg({
               inset: 0,
               display: "grid",
               placeItems: "center",
-              color: "var(--danger)",
+              color: "#ff8080",
               fontSize: "var(--fs-xs)",
               padding: "0 12px",
               textAlign: "center",
@@ -111,7 +108,6 @@ function LoadingImg({
 }
 
 export function PreprocPreview({ draftId, config }: Props) {
-  // Debounce the knobs so dragging a slider doesn't hammer the backend.
   const inFov = useDebounced(config.fisheye_in_fov, 500);
   const outFov = useDebounced(config.fisheye_out_fov, 500);
   const samples = useDebounced(config.osd_mask_samples, 500);
@@ -147,7 +143,17 @@ export function PreprocPreview({ draftId, config }: Props) {
         in_fov: inFov,
         out_fov: outFov,
       }),
-    [draftId, samples, stdT, dilate, detectText, edgeFrac, useFisheye, inFov, outFov],
+    [
+      draftId,
+      samples,
+      stdT,
+      dilate,
+      detectText,
+      edgeFrac,
+      useFisheye,
+      inFov,
+      outFov,
+    ],
   );
 
   if (!useFisheye && !useOsd) {
@@ -160,12 +166,56 @@ export function PreprocPreview({ draftId, config }: Props) {
           className="panel-body"
           style={{ color: "var(--muted)", fontSize: "var(--fs-xs)" }}
         >
-          enable fisheye or osd masking on the right to see a live preview of the first
-          frame with those operations applied.
+          enable fisheye or osd masking to see a live preview of the first frame
+          with those operations applied.
         </div>
       </div>
     );
   }
+
+  const fisheyeBlock = useFisheye && (
+    <section
+      style={{ display: "grid", gap: 6 }}
+      aria-label="fisheye preview"
+    >
+      <div
+        className="section-title"
+        style={{ display: "flex", justifyContent: "space-between" }}
+      >
+        <span>fisheye · drag to compare</span>
+        <span style={{ color: "var(--muted)" }}>
+          {inFov}° → {outFov}°
+        </span>
+      </div>
+      <CompareSlider
+        leftSrc={beforeUrl}
+        rightSrc={afterUrl}
+        leftLabel="before"
+        rightLabel="after"
+        alt="fisheye unwrap"
+      />
+    </section>
+  );
+
+  const osdBlock = useOsd && (
+    <section style={{ display: "grid", gap: 6 }} aria-label="osd preview">
+      <div
+        className="section-title"
+        style={{ display: "flex", justifyContent: "space-between" }}
+      >
+        <span>osd mask · detected regions in red</span>
+        <span style={{ color: "var(--muted)" }}>
+          {detectText ? `edge ${edgeFrac} + ` : ""}
+          std {stdT} · dilate {dilate}
+        </span>
+      </div>
+      <PreviewTile
+        src={osdUrl}
+        alt="OSD mask overlay"
+        label={`osd · ${samples} samples${useFisheye ? " · post-fisheye" : ""}`}
+      />
+    </section>
+  );
 
   return (
     <div className="panel">
@@ -175,33 +225,10 @@ export function PreprocPreview({ draftId, config }: Props) {
       </div>
       <div
         className="panel-body"
-        style={{
-          display: "grid",
-          gap: 10,
-          gridTemplateColumns: useFisheye
-            ? useOsd
-              ? "repeat(3, minmax(0, 1fr))"
-              : "repeat(2, minmax(0, 1fr))"
-            : "minmax(0, 1fr)",
-        }}
+        style={{ display: "grid", gap: 14 }}
       >
-        {useFisheye && (
-          <>
-            <LoadingImg src={beforeUrl} alt="source frame" label="before · raw" />
-            <LoadingImg
-              src={afterUrl}
-              alt="fisheye unwrapped"
-              label={`after · ${inFov}°→${outFov}°`}
-            />
-          </>
-        )}
-        {useOsd && (
-          <LoadingImg
-            src={osdUrl}
-            alt="OSD mask overlay"
-            label={`osd mask · ${detectText ? `edge ${edgeFrac} + ` : ""}std ${stdT} · dilate ${dilate}`}
-          />
-        )}
+        {fisheyeBlock}
+        {osdBlock}
       </div>
     </div>
   );
