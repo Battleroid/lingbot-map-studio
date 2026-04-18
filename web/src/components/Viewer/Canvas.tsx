@@ -9,6 +9,7 @@ import {
   useBounds,
 } from "@react-three/drei";
 import { Suspense, useEffect, useMemo, useRef } from "react";
+import type { FlyControls as FlyControlsImpl } from "three-stdlib";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 import { CameraPath, type CameraPose } from "./CameraPath";
@@ -71,12 +72,49 @@ function RefitController() {
   return null;
 }
 
+const BASE_FLY_SPEED = 2;
+const SHIFT_SLOW_FACTOR = 0.15;
+
+/** Listens for Shift keydown/up while fly mode is active and scales the
+ *  FlyControls' movementSpeed accordingly. Rendered inside the <Canvas>. */
+function FlySpeedModifier({
+  flyRef,
+}: {
+  flyRef: React.RefObject<FlyControlsImpl | null>;
+}) {
+  useEffect(() => {
+    const onKey = (down: boolean) => (e: KeyboardEvent) => {
+      if (e.key !== "Shift") return;
+      const fc = flyRef.current;
+      if (!fc) return;
+      // FlyControls' movementSpeed is public; mutating directly takes effect
+      // on the next update() tick.
+      fc.movementSpeed = down
+        ? BASE_FLY_SPEED * SHIFT_SLOW_FACTOR
+        : BASE_FLY_SPEED;
+    };
+    const down = onKey(true);
+    const up = onKey(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    // Restore base speed on unmount in case shift was held when mode changed.
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      const fc = flyRef.current;
+      if (fc) fc.movementSpeed = BASE_FLY_SPEED;
+    };
+  }, [flyRef]);
+  return null;
+}
+
 export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
   const mode = useViewerStore((s) => s.mode);
   const cameraMode = useViewerStore((s) => s.cameraMode);
   const refitSignal = useViewerStore((s) => s.refitSignal);
   const lassoActive = useViewerStore((s) => s.lassoActive);
   const controls = useRef<OrbitControlsImpl>(null);
+  const flyRef = useRef<FlyControlsImpl>(null);
 
   const showPoints = mode === "points" || mode === "points-color";
   const showMesh = mode === "mesh" || mode === "wireframe";
@@ -135,13 +173,17 @@ export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
           // Key on refitSignal so a recenter click fully remounts FlyControls
           // and it picks up the camera's freshly-set pitch/yaw/position
           // instead of overwriting them from its stale internal state.
-          <FlyControls
-            key={`fly-${refitSignal}`}
-            makeDefault
-            movementSpeed={2}
-            rollSpeed={0.6}
-            dragToLook
-          />
+          <>
+            <FlyControls
+              key={`fly-${refitSignal}`}
+              ref={flyRef}
+              makeDefault
+              movementSpeed={BASE_FLY_SPEED}
+              rollSpeed={0.6}
+              dragToLook
+            />
+            <FlySpeedModifier flyRef={flyRef} />
+          </>
         )}
       </Canvas>
       {cameraMode === "fly" && (
@@ -158,7 +200,7 @@ export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
             pointerEvents: "none",
           }}
         >
-          fly · WASD move · drag to look · R/F up/down · Q/E roll
+          fly · WASD move · drag to look · R/F up/down · Q/E roll · hold SHIFT to crawl
         </div>
       )}
       {!glbUrl && !plyUrl && (
