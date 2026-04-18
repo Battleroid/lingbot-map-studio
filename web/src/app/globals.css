@@ -2,12 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Berkeley Mono — commercial (usgraphics.com). Drop the licensed woff2 at
+   public/fonts/berkeley-mono.woff2 and it takes over automatically. */
 @font-face {
   font-family: "Berkeley Mono";
   src: url("/fonts/berkeley-mono.woff2") format("woff2");
   font-weight: 100 900;
   font-display: swap;
   font-style: normal;
+}
+
+/* Commit Mono — SIL OFL, shipped with this app. Designed as a Berkeley Mono
+   alternative; used when Berkeley Mono isn't installed. */
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/fonts/commit-mono-400.woff2") format("woff2");
+  font-weight: 100 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/fonts/commit-mono-700.woff2") format("woff2");
+  font-weight: 501 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/fonts/commit-mono-400-italic.woff2") format("woff2");
+  font-weight: 100 500;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  src: url("/fonts/commit-mono-700-italic.woff2") format("woff2");
+  font-weight: 501 900;
+  font-style: italic;
+  font-display: swap;
 }
 
 :root {
@@ -30,8 +66,11 @@
   --pad: 10px;
   --pad-sm: 6px;
 
-  --font-mono: "Berkeley Mono", var(--font-roboto-mono), "Roboto Mono", ui-monospace,
-    "SFMono-Regular", Consolas, monospace;
+  /* Font stack: Berkeley Mono first (if user installed the licensed file),
+     then Commit Mono (bundled free alternative), then Roboto Mono from
+     next/font, then system fallbacks. */
+  --font-mono: "Berkeley Mono", "Commit Mono", var(--font-roboto-mono),
+    "Roboto Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
 *,

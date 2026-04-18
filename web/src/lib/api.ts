@@ -139,6 +139,43 @@ export function artifactUrl(jobId: string, name: string): string {
   return `${API_BASE}/api/jobs/${jobId}/artifacts/${encodeURIComponent(name)}`;
 }
 
+export function fisheyePreviewUrl(
+  draftId: string,
+  opts: { side: "before" | "after"; in_fov?: number; out_fov?: number; v?: number },
+): string {
+  const qs = new URLSearchParams({
+    side: opts.side,
+    ...(opts.in_fov !== undefined ? { in_fov: String(opts.in_fov) } : {}),
+    ...(opts.out_fov !== undefined ? { out_fov: String(opts.out_fov) } : {}),
+    ...(opts.v !== undefined ? { _v: String(opts.v) } : {}),
+  });
+  return `${API_BASE}/api/drafts/${draftId}/preview/fisheye?${qs}`;
+}
+
+export function osdPreviewUrl(
+  draftId: string,
+  opts: {
+    samples?: number;
+    std_threshold?: number;
+    dilate?: number;
+    fisheye?: boolean;
+    in_fov?: number;
+    out_fov?: number;
+    v?: number;
+  },
+): string {
+  const qs = new URLSearchParams();
+  if (opts.samples !== undefined) qs.set("samples", String(opts.samples));
+  if (opts.std_threshold !== undefined)
+    qs.set("std_threshold", String(opts.std_threshold));
+  if (opts.dilate !== undefined) qs.set("dilate", String(opts.dilate));
+  if (opts.fisheye) qs.set("fisheye", "true");
+  if (opts.in_fov !== undefined) qs.set("in_fov", String(opts.in_fov));
+  if (opts.out_fov !== undefined) qs.set("out_fov", String(opts.out_fov));
+  if (opts.v !== undefined) qs.set("_v", String(opts.v));
+  return `${API_BASE}/api/drafts/${draftId}/preview/osd?${qs}`;
+}
+
 export function jobStreamUrl(jobId: string): string {
   const u = new URL(API_BASE);
   const proto = u.protocol === "https:" ? "wss:" : "ws:";

@@ -36,6 +36,11 @@ from app.jobs.schema import (
 from app.mesh.ops import apply_op, mesh_summary
 from app.pipeline.export import reexport
 from app.pipeline.inference import load_cached_predictions
+from app.pipeline.preview import (
+    apply_fisheye,
+    extract_frame,
+    render_osd_preview,
+)
 from app.pipeline.probe import probe_video, suggest_config
 from app.utils.logging import configure_logging
 from app.utils.paths import new_job_id, safe_filename
@@ -152,6 +157,152 @@ async def drop_draft(draft_id: str) -> dict[str, bool]:
     if not ok:
         raise HTTPException(status_code=404, detail="draft not found")
     return {"deleted": True}
+
+
+@app.get("/api/drafts/{draft_id}/preview/fisheye")
+async def preview_fisheye(
+    draft_id: str,
+    in_fov: float = 165.0,
+    out_fov: float = 90.0,
+    side: str = "after",
+) -> FileResponse:
+    """Return a single PNG: an extracted source frame, optionally unwrapped."""
+    rec = drafts.load_draft(draft_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    sources = drafts.draft_video_paths(draft_id)
+    if not sources:
+        raise HTTPException(status_code=409, detail="draft has no uploaded files")
+    src_video = sources[0]
+    duration = rec.get("probes", [{}])[0].get("duration_s") if rec.get("probes") else None
+    ts = min(max(0.5, (duration or 0.0) * 0.1), max(0.5, (duration or 1.0) - 0.25))
+
+    preview_dir = drafts.draft_dir(draft_id) / "preview"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    before_png = preview_dir / "before.png"
+    if not before_png.exists():
+        await extract_frame(src_video, before_png, timestamp=ts)
+
+    if side == "before":
+        return FileResponse(
+            before_png,
+            media_type="image/png",
+            filename="before.png",
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    after_png = preview_dir / f"after_in{int(in_fov)}_out{int(out_fov)}.png"
+    if not after_png.exists():
+        await apply_fisheye(before_png, after_png, in_fov=in_fov, out_fov=out_fov)
+    return FileResponse(
+        after_png,
+        media_type="image/png",
+        filename=after_png.name,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+async def _maybe_fisheye_prewarp(
+    src_video, preview_dir, in_fov: float, out_fov: float
+):
+    import asyncio as _asyncio
+
+    warped = preview_dir / f"warped_fe{int(in_fov)}x{int(out_fov)}.mp4"
+    if warped.exists():
+        return warped
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(src_video),
+        "-vf",
+        f"v360=input=fisheye:output=flat:ih_fov={in_fov}:iv_fov={in_fov}:d_fov={out_fov}",
+        "-preset",
+        "ultrafast",
+        str(warped),
+    ]
+    proc = await _asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=_asyncio.subprocess.PIPE,
+        stderr=_asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"fisheye pre-warp failed: {stderr.decode(errors='replace')}",
+        )
+    return warped
+
+
+@app.get("/api/drafts/{draft_id}/preview/osd")
+async def preview_osd(
+    draft_id: str,
+    samples: int = 30,
+    std_threshold: float = 5.0,
+    dilate: int = 2,
+    fisheye: bool = False,
+    in_fov: float = 165.0,
+    out_fov: float = 90.0,
+) -> FileResponse:
+    """Return a PNG: the first frame with the computed OSD mask overlaid in red."""
+    rec = drafts.load_draft(draft_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    sources = drafts.draft_video_paths(draft_id)
+    if not sources:
+        raise HTTPException(status_code=409, detail="draft has no uploaded files")
+    src_video = sources[0]
+    duration = rec.get("probes", [{}])[0].get("duration_s") if rec.get("probes") else None
+    fps_hint = rec.get("probes", [{}])[0].get("fps") if rec.get("probes") else None
+
+    preview_dir = drafts.draft_dir(draft_id) / "preview"
+    samples_dir = preview_dir / "osd_samples"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    work_video = src_video
+    key = f"osd_s{samples}_t{std_threshold:g}_d{dilate}"
+    if fisheye:
+        key = f"{key}_fe{int(in_fov)}x{int(out_fov)}"
+    out_png = preview_dir / f"{key}.png"
+    if out_png.exists():
+        return FileResponse(
+            out_png,
+            media_type="image/png",
+            filename=out_png.name,
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
+    if fisheye:
+        work_video = await _maybe_fisheye_prewarp(src_video, preview_dir, in_fov, out_fov)
+
+    try:
+        result = await render_osd_preview(
+            video=work_video,
+            work_dir=samples_dir,
+            out_png=out_png,
+            samples=samples,
+            std_threshold=std_threshold,
+            dilate=dilate,
+            duration_s=duration,
+            fps_hint=fps_hint,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(
+        out_png,
+        media_type="image/png",
+        filename=out_png.name,
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "X-Mask-Coverage": str(result.get("coverage", 0)),
+            "X-Mask-Samples": str(result.get("samples", 0)),
+        },
+    )
 
 
 @app.post("/api/jobs", status_code=201)

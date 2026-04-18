@@ -118,11 +118,12 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
         return {}
 
     # Pick the best source FPS we see; we'll subsample to target.
+    # lingbot-map streams at ~20 FPS on 518px inputs per the paper — cap there.
     src_fps = max(
         (p["fps"] for p in probes if p.get("fps")),
         default=30.0,
     )
-    target_fps = min(10.0, src_fps)
+    target_fps = min(20.0, src_fps)
 
     total_duration = sum(p.get("duration_s") or 0.0 for p in probes)
     est_frames = int(round(target_fps * total_duration))

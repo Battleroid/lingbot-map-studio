@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { ConfigPanel } from "@/components/ConfigPanel";
 import { JobList } from "@/components/JobList";
+import { PreprocPreview } from "@/components/PreprocPreview";
 import { ProbePanel } from "@/components/ProbePanel";
 import { UploadDropzone } from "@/components/UploadDropzone";
 import {
@@ -127,6 +128,7 @@ export default function Home() {
               {draft && (
                 <>
                   <ProbePanel draft={draft} />
+                  <PreprocPreview draftId={draft.id} config={effectiveConfig} />
                   <div
                     style={{
                       display: "flex",
