@@ -18,12 +18,15 @@ export function PointCloud({ url, color }: Props) {
   const pointSize = useViewerStore((s) => s.pointSize);
   const setAutoPointSize = useViewerStore((s) => s.setAutoPointSize);
   const setSceneDiagonal = useViewerStore((s) => s.setSceneDiagonal);
+  const setSceneScale = useViewerStore((s) => s.setSceneScale);
   const bounds = useBounds();
   const ptsRef = useRef<THREE.Points>(null);
   const hasFittedRef = useRef(false);
 
-  // Compute the auto base point size + scene diagonal from the bbox. These
-  // drive the point-size slider and the fly-mode movement speed respectively.
+  // Compute point-size, scene diagonal, AND scene scale from the geometry.
+  // scene_scale = ||P95 - P5|| of point positions — matches lingbot-map's
+  // upstream scene-scale logic (resistant to outlier points that would
+  // otherwise dominate min/max bbox). Used to size camera frustums + path.
   useEffect(() => {
     if (!geometry.boundingBox) geometry.computeBoundingBox();
     const bb = geometry.boundingBox;
@@ -34,7 +37,35 @@ export function PointCloud({ url, color }: Props) {
     if (!Number.isFinite(diag) || diag <= 0) return;
     setSceneDiagonal(diag);
     setAutoPointSize(Math.max(0.0005, Math.min(2, diag * 0.0015)));
-  }, [geometry, setAutoPointSize, setSceneDiagonal]);
+
+    // Percentile-based scale. Sort per-axis, pick P5/P95, diagonal of the
+    // extent vector. Float32Array.sort is a typed sort — fast for 1-2M pts.
+    const pos = geometry.getAttribute("position");
+    if (!pos) return;
+    const n = pos.count;
+    if (n < 100) {
+      setSceneScale(diag);
+      return;
+    }
+    const xs = new Float32Array(n);
+    const ys = new Float32Array(n);
+    const zs = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      xs[i] = pos.getX(i);
+      ys[i] = pos.getY(i);
+      zs[i] = pos.getZ(i);
+    }
+    xs.sort();
+    ys.sort();
+    zs.sort();
+    const p5 = Math.floor(n * 0.05);
+    const p95 = Math.floor(n * 0.95);
+    const dx = xs[p95] - xs[p5];
+    const dy = ys[p95] - ys[p5];
+    const dz = zs[p95] - zs[p5];
+    const scale = Math.max(0.1, Math.sqrt(dx * dx + dy * dy + dz * dz));
+    setSceneScale(scale);
+  }, [geometry, setAutoPointSize, setSceneDiagonal, setSceneScale]);
 
   // Fit the camera ONCE per mount. Subsequent URL changes (incoming partial
   // snapshots) must NOT refit — otherwise it yanks the camera while the user

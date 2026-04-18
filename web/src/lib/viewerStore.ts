@@ -33,8 +33,11 @@ interface ViewerState {
   pointSizeScale: number;
   /** Final applied size = autoPointSize * pointSizeScale. */
   pointSize: number;
-  /** Point-cloud bounding-box diagonal. */
+  /** Point-cloud bounding-box diagonal (min→max). */
   sceneDiagonal: number;
+  /** Point-cloud 5–95 percentile extent, robust to outliers. Matches
+   *  lingbot-map's internal scene_scale used to size camera frustums. */
+  sceneScale: number;
   /** Camera-path bounding-box diagonal. */
   pathDiagonal: number;
   /** User multiplier on fly-mode base speed. 1.0 ≈ traverse the combined
@@ -61,6 +64,7 @@ interface ViewerState {
   setAutoPointSize: (v: number) => void;
   setPointSizeScale: (v: number) => void;
   setSceneDiagonal: (v: number) => void;
+  setSceneScale: (v: number) => void;
   setPathDiagonal: (v: number) => void;
   setFlySpeedMult: (v: number) => void;
   setConfPercentile: (v: number) => void;
@@ -85,6 +89,7 @@ export const useViewerStore = create<ViewerState>((set) => ({
   pointSizeScale: 1,
   pointSize: 0.01,
   sceneDiagonal: 10,
+  sceneScale: 10,
   pathDiagonal: 0,
   flySpeedMult: 1,
   confPercentile: 50,
@@ -128,6 +133,7 @@ export const useViewerStore = create<ViewerState>((set) => ({
   setPointSizeScale: (v) =>
     set((s) => ({ pointSizeScale: v, pointSize: s.autoPointSize * v })),
   setSceneDiagonal: (sceneDiagonal) => set({ sceneDiagonal }),
+  setSceneScale: (sceneScale) => set({ sceneScale }),
   setPathDiagonal: (pathDiagonal) => set({ pathDiagonal }),
   setFlySpeedMult: (flySpeedMult) => set({ flySpeedMult }),
   setConfPercentile: (confPercentile) => set({ confPercentile }),

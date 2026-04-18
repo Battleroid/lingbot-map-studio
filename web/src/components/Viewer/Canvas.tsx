@@ -89,17 +89,18 @@ function FlySpeedModifier({
 }: {
   flyRef: React.RefObject<FlyControlsImpl | null>;
 }) {
-  const sceneDiagonal = useViewerStore((s) => s.sceneDiagonal);
+  const sceneScale = useViewerStore((s) => s.sceneScale);
   const pathDiagonal = useViewerStore((s) => s.pathDiagonal);
   const flySpeedMult = useViewerStore((s) => s.flySpeedMult);
   const shiftHeldRef = useRef(false);
 
-  // Use the LARGER of point-cloud and camera-path extents — FPV-style
-  // reconstructions often have a camera flight wider than the visible
-  // points, and scaling speed only to the tight point cluster makes
-  // traversing the flight path painful.
-  const effectiveDiag = Math.max(sceneDiagonal, pathDiagonal);
-  const baseSpeed = Math.max(0.05, effectiveDiag * BASE_SPEED_PER_DIAG * flySpeedMult);
+  // Use max(scene_scale, path_diagonal) so fly movement works whether the
+  // interesting content is the reconstruction or the camera trajectory.
+  // scene_scale is the 5-95 percentile extent of the point cloud (upstream
+  // convention), resistant to a handful of outlier world_points that a
+  // naive bbox.diagonal would otherwise be dominated by.
+  const effectiveScale = Math.max(sceneScale, pathDiagonal);
+  const baseSpeed = Math.max(0.05, effectiveScale * BASE_SPEED_PER_DIAG * flySpeedMult);
 
   // Apply whenever base speed changes (scene diagonal updated, multiplier
   // changed, or controls remounted on refit).

@@ -151,24 +151,25 @@ def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
         )
 
     # The reconstruction filter appended a new mesh to the set. Find the
-    # one that actually has faces (there may be several meshes now — the
-    # original cloud with 0 faces plus the Poisson output) and make that
-    # the current mesh so the exporter picks it up.
-    best_id = -1
+    # one with the most faces — that's the Poisson output.
+    source_id: int = -1
+    best_id: int = -1
     best_faces = 0
-    # mesh_number() gives the count of LIVE meshes; iterate by mesh_id
-    # which can be sparse after deletions (safe for a fresh MeshSet too).
-    try:
-        ids = list(ms.mesh_id_list())
-    except Exception:
-        ids = list(range(ms.mesh_number()))
-    for mid in ids:
+    for mid in range(64):  # MeshSet IDs are typically small ints
         try:
-            ms.set_current_mesh(mid)
-            f = ms.current_mesh().face_number()
+            if not ms.mesh_id_exists(mid):
+                continue
+        except Exception:
+            continue
+        try:
+            m = ms.mesh(mid)
+            f = m.face_number()
             if f > best_faces:
                 best_faces = f
                 best_id = mid
+            # The point cloud source has 0 faces and many vertices.
+            if f == 0 and m.vertex_number() > 0 and source_id < 0:
+                source_id = mid
         except Exception:
             continue
     if best_id < 0:
@@ -176,6 +177,22 @@ def _surface_reconstruct(ms, params: dict[str, Any]) -> None:
             "Poisson reconstruction produced no triangle mesh — "
             "try a lower depth, or more points may be needed"
         )
+
+    # Transfer per-vertex colors from the source point cloud (which was
+    # written out of the colored reconstruction.ply) onto the new mesh
+    # vertices. Without this the GLB exports as a flat black surface because
+    # Poisson produces geometry with no color attribute.
+    if source_id >= 0 and source_id != best_id:
+        try:
+            ms.set_current_mesh(best_id)
+            ms.transfer_attributes_per_vertex(
+                sourcemesh=source_id,
+                targetmesh=best_id,
+                colortransfer=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("color transfer to poisson mesh failed: %s", exc)
+
     ms.set_current_mesh(best_id)
 
 
