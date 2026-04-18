@@ -49,6 +49,32 @@ from app.utils.paths import new_job_id, safe_filename
 log = logging.getLogger(__name__)
 
 
+async def _sweep_orphaned_jobs() -> None:
+    """Jobs that were running when the worker last stopped are orphaned.
+
+    Their `asyncio.create_task` died with the process but their sqlite row
+    still claims `queued / ingest / inference / export`. On startup flip
+    them to `failed` so the UI shows a clear state and the user can
+    delete or restart.
+    """
+    rows = await store.list_jobs()
+    running = {"queued", "ingest", "inference", "export"}
+    orphaned = 0
+    for r in rows:
+        if r.status in running:
+            await store.update_job(
+                r.id,
+                status="failed",
+                error=(
+                    "worker restarted while this job was running — "
+                    "marked as orphaned. delete or restart."
+                ),
+            )
+            orphaned += 1
+    if orphaned:
+        log.info("marked %d orphaned job(s) as failed on startup", orphaned)
+
+
 def _apply_vram_cap() -> None:
     """Cap this process's total CUDA memory to a fraction of device VRAM.
 
@@ -78,6 +104,7 @@ async def lifespan(app: FastAPI):
     configure_logging()
     settings.ensure_dirs()
     await store.init_store()
+    await _sweep_orphaned_jobs()
     _apply_vram_cap()
     yield
 
@@ -393,13 +420,36 @@ async def create_job(
 
 
 @app.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str) -> dict[str, Any]:
+async def delete_job(job_id: str, force: bool = False) -> dict[str, Any]:
+    """Delete a job and all its artifacts.
+
+    A "running" status column is only authoritative while this worker process
+    actually has an asyncio task for the job — tracked via the cancel-token
+    registry. If the column says running but no token exists, the job is
+    orphaned (from a prior worker crash) and is safe to delete. Passing
+    `?force=true` bypasses even the token check.
+    """
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    # Terminal statuses only — do not delete a running job.
-    if job.status in {"queued", "ingest", "inference", "export"}:
-        raise HTTPException(status_code=409, detail="job is running")
+
+    running_statuses = {"queued", "ingest", "inference", "export"}
+    if job.status in running_statuses and not force:
+        # Is there actually a live task? If not, this is an orphan.
+        has_token = cancel_mod.get_token.__wrapped__ if False else None  # noqa
+        token = cancel_mod._tokens.get(job_id)  # type: ignore[attr-defined]
+        if token is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="job is running — stop it first or pass force=true",
+            )
+        # Orphaned: mark failed, then delete.
+        await store.update_job(
+            job_id,
+            status="failed",
+            error="deleted while orphaned (no active worker task)",
+        )
+
     await store.delete_job(job_id)
     job_dir = settings.job_dir(job_id)
     if job_dir.exists():
