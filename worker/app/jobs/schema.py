@@ -74,6 +74,11 @@ class JobConfig(BaseModel):
     # inference the watchdog aborts the job. None = use worker-wide default.
     vram_soft_limit_gb: Optional[float] = None
 
+    # Live reconstruction snapshots — every N processed frames the inference
+    # hook writes a partial PLY so the viewer can show the point cloud growing.
+    # 0 disables. Lower = smoother updates, more disk/CPU churn.
+    partial_snapshot_every: int = 60
+
 
 class Artifact(BaseModel):
     name: str

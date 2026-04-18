@@ -28,11 +28,30 @@ export default function JobPage({ params }: Props) {
 
   const activeMeshName = meshOverride || manifest?.latest_mesh || null;
 
-  const plyName = useMemo(() => {
+  // Find the latest partial PLY emitted during inference (live preview) so we
+  // can swap the viewer's point cloud URL as the reconstruction grows.
+  const latestPartialPly = useMemo(() => {
+    let latest: string | null = null;
+    for (const ev of events) {
+      if (ev.stage === "artifact" && ev.data?.["kind"] === "partial_ply") {
+        const name = ev.data?.["name"];
+        if (typeof name === "string") latest = name;
+      }
+    }
+    return latest;
+  }, [events]);
+
+  const finalPlyName = useMemo(() => {
     if (!manifest) return null;
-    const ply = manifest.artifacts.find((a) => a.suffix === "ply");
+    const ply = manifest.artifacts.find(
+      (a) => a.suffix === "ply" && a.name.startsWith("reconstruction"),
+    );
     return ply?.name || null;
   }, [manifest]);
+
+  // Prefer the final PLY once the job is ready; otherwise show the latest
+  // partial snapshot during inference.
+  const plyName = finalPlyName || latestPartialPly || null;
 
   const glbUrl = activeMeshName ? artifactUrl(id, activeMeshName) : null;
   const plyUrl = plyName ? artifactUrl(id, plyName) : null;
@@ -97,6 +116,25 @@ export default function JobPage({ params }: Props) {
         <ViewerControls />
         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
           <ViewerCanvas glbUrl={glbUrl} plyUrl={plyUrl} />
+          {plyName && plyName.startsWith("partial_") && (
+            <div
+              style={{
+                position: "absolute",
+                top: 10,
+                left: 10,
+                padding: "3px 8px",
+                background: "var(--fg)",
+                color: "var(--bg)",
+                fontSize: "var(--fs-xs)",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                border: "1px solid var(--fg)",
+                pointerEvents: "none",
+              }}
+            >
+              live · {plyName.replace(/^partial_0*/, "").replace(".ply", "")} frames
+            </div>
+          )}
         </div>
       </section>
 

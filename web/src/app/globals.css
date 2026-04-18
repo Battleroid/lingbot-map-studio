@@ -714,11 +714,17 @@ table.dtable tr:last-child td {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 0;
+  /* Hard cap so the viewer below never reflows on new log text. */
+  height: 140px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 1100px) {
   .status-strip {
     grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    max-height: 300px;
+    overflow: hidden;
   }
 }
 
@@ -729,11 +735,37 @@ table.dtable tr:last-child td {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
   background-color: #f0f0f0;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f0f0f0'/><rect x='0' y='0' width='2' height='2' fill='%23d0d0d0'/><rect x='2' y='2' width='2' height='2' fill='%23d0d0d0'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
+}
+
+/* Single-line message under the stage pills. Truncates long ffmpeg/tqdm
+   lines instead of wrapping and shoving the viewer around. */
+.status-cell .latest-msg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.stage-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  /* Hide webkit scrollbar so the row doesn't reserve space for one. */
+  scrollbar-width: none;
+}
+
+.stage-row::-webkit-scrollbar {
+  display: none;
 }
 
 .status-cell:last-child {
@@ -758,12 +790,6 @@ table.dtable tr:last-child td {
 }
 
 /* Stage pills */
-.stage-row {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
 .stage-pill {
   display: flex;
   align-items: center;

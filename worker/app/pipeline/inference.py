@@ -4,6 +4,7 @@ import asyncio
 import glob
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,7 +17,6 @@ from app.pipeline.watchdog import VramLimitExceeded, VramWatchState
 log = logging.getLogger(__name__)
 
 # lingbot-map wants a large GPU memory arena; set before first CUDA init.
-# PYTORCH_ALLOC_CONF is the current name; keep the legacy one for older builds.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
@@ -37,7 +37,6 @@ def _choose_dtype() -> "Any":
 
 
 def _build_model(config: JobConfig):
-    """Import the correct class (both modules export GCTStream)."""
     if config.mode == "windowed":
         from lingbot_map.models.gct_stream_window import GCTStream as ModelCls
     else:
@@ -58,7 +57,6 @@ def _build_model(config: JobConfig):
 
 
 def _postprocess(predictions: dict, image_shape) -> dict:
-    """Match demo.py: pose_enc -> extrinsic/intrinsic, squeeze batch, numpy."""
     import torch
 
     from lingbot_map.utils.geometry import closed_form_inverse_se3_general
@@ -82,14 +80,65 @@ def _postprocess(predictions: dict, image_shape) -> dict:
     return out
 
 
+def _write_partial_ply(
+    wp_list: list,        # list of torch tensors (1, Ti, H, W, 3), CPU
+    wpc_list: list,       # list of torch tensors (1, Ti, H, W), CPU
+    imgs_cpu,             # torch tensor (1, T_total, 3, H, W) CPU, sliced to covered frames
+    out_path: Path,
+    conf_percentile: float,
+) -> tuple[int, int]:
+    """Build a colored point cloud from accumulated per-frame outputs and save it.
+
+    Returns (point_count, skipped_count).
+    """
+    import torch
+    import trimesh
+
+    if not wp_list or not wpc_list:
+        return 0, 0
+
+    wp = torch.cat(wp_list, dim=1)          # (1, T, H, W, 3)
+    wpc = torch.cat(wpc_list, dim=1)        # (1, T, H, W)
+    T = wp.shape[1]
+
+    imgs = imgs_cpu[:, :T]                  # (1, T, 3, H, W)
+    imgs = imgs.permute(0, 1, 3, 4, 2)      # (1, T, H, W, 3)
+
+    pts = wp[0].reshape(-1, 3).float().numpy()
+    c = wpc[0].reshape(-1).float().numpy()
+    colors_arr = (imgs[0].reshape(-1, 3).float().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+    # Guard against degenerate cases early in inference.
+    if c.size < 3:
+        return 0, 0
+    pct = max(0.0, min(99.0, float(conf_percentile)))
+    thresh = float(np.percentile(c, pct))
+    mask = (c >= thresh) & (c > 1e-5)
+    kept = int(mask.sum())
+    skipped = int(c.size - kept)
+    if kept == 0:
+        return 0, skipped
+
+    pc = trimesh.PointCloud(vertices=pts[mask], colors=colors_arr[mask])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pc.export(str(out_path))
+    return kept, skipped
+
+
 def _run_inference_sync(
     frames: list[str],
     ckpt_path: Path,
     config: JobConfig,
     progress_cb: Callable[[int, int], None],
+    partial_cb: Callable[[int, Path, int], None] | None,
+    artifacts_dir: Path,
     vram_state: VramWatchState | None = None,
 ) -> tuple[dict, tuple[int, ...]]:
-    """Synchronous GPU inference. Runs in a worker thread."""
+    """Synchronous GPU inference. Runs in a worker thread.
+
+    Adds per-frame accumulation of world_points + world_points_conf so a
+    background thread can periodically snapshot partial PLYs for the viewer.
+    """
     import torch
 
     from lingbot_map.utils.load_fn import load_and_preprocess_images
@@ -127,26 +176,98 @@ def _run_inference_sync(
         alloc = torch.cuda.memory_allocated() / 1024 / 1024
         print(f"GPU mem after load: alloc={alloc:.1f}MB")
 
-    # Progress: hook model.forward to count per-frame calls inside the streaming loop.
-    orig_forward = model.forward
-    frame_count = {"i": 0}
-    total = int(images.shape[0] if images.ndim == 4 else images.shape[1])
-
-    def _hooked_forward(*args, **kwargs):
-        # Bail before the next forward pass if the watchdog tripped. Lets the
-        # inference thread unwind cleanly rather than being OOM-killed.
-        if vram_state is not None and vram_state.tripped:
-            raise VramLimitExceeded(vram_state.reason or "vram soft-limit exceeded")
-        result = orig_forward(*args, **kwargs)
-        frame_count["i"] += 1
-        progress_cb(frame_count["i"], total)
-        return result
-
-    model.forward = _hooked_forward  # type: ignore[assignment]
-
+    # Move images to device once; keep a CPU copy for partial PLY color data.
     images_dev = images.to(device)
     if images_dev.ndim == 4:
         images_dev = images_dev.unsqueeze(0)
+    images_cpu_full = images_dev.detach().to("cpu")
+
+    total = int(images_dev.shape[1])
+
+    # Accumulators for partial snapshots
+    orig_forward = model.forward
+    frame_count = {"i": 0}
+    wp_accum: list = []
+    wpc_accum: list = []
+    last_snapshot = {"i": 0}
+    snapshot_active = {"v": False}
+    snapshot_every = max(0, int(config.partial_snapshot_every))
+
+    def _spawn_snapshot(frames_done: int) -> None:
+        """Kick off a background thread that writes a partial PLY."""
+        if snapshot_active["v"] or not partial_cb:
+            return
+        snapshot_active["v"] = True
+        # Freeze the accumulator lists and image slice before starting the
+        # thread so inference can keep mutating them safely.
+        wp_snap = list(wp_accum)
+        wpc_snap = list(wpc_accum)
+        imgs_snap = images_cpu_full
+        out_path = artifacts_dir / f"partial_{frames_done:06d}.ply"
+
+        def _worker():
+            try:
+                kept, _ = _write_partial_ply(
+                    wp_snap, wpc_snap, imgs_snap, out_path,
+                    conf_percentile=config.conf_percentile,
+                )
+                if kept > 0:
+                    partial_cb(frames_done, out_path, kept)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("partial snapshot failed: %s", exc)
+            finally:
+                snapshot_active["v"] = False
+
+        threading.Thread(target=_worker, daemon=True, name=f"snap-{frames_done}").start()
+
+    def _hooked_forward(*args, **kwargs):
+        if vram_state is not None and vram_state.tripped:
+            raise VramLimitExceeded(vram_state.reason or "vram soft-limit exceeded")
+
+        # Figure out how many frames this forward call represents. For the
+        # streaming loop the first call is the batched scale-frames pass
+        # (processes num_scale_frames frames in one go), then each subsequent
+        # call processes one frame. For the windowed mode, every window has
+        # its own scale-frames batched pass.
+        frames_this_call = 1
+        if args:
+            inp = args[0]
+            if hasattr(inp, "shape") and getattr(inp, "ndim", 0) >= 2:
+                frames_this_call = int(inp.shape[1])
+
+        result = orig_forward(*args, **kwargs)
+
+        # Stash world_points + conf on CPU. Use detach().cpu() — small copy,
+        # but avoids holding a GPU reference across snapshots.
+        if isinstance(result, dict):
+            wp = result.get("world_points")
+            wpc = result.get("world_points_conf")
+            if wp is not None and wpc is not None:
+                try:
+                    wp_accum.append(wp.detach().to("cpu"))
+                    wpc_accum.append(wpc.detach().to("cpu"))
+                except Exception:  # noqa: BLE001
+                    pass
+
+        frame_count["i"] += frames_this_call
+        done = min(frame_count["i"], total)
+        progress_cb(done, total)
+
+        # Partial snapshot trigger. We want "first snapshot after ~snapshot_every
+        # frames, then every snapshot_every frames after that". Drop the call
+        # if a previous snapshot is still running so we don't pile up.
+        if (
+            snapshot_every > 0
+            and partial_cb
+            and done < total
+            and done - last_snapshot["i"] >= snapshot_every
+        ):
+            last_snapshot["i"] = done
+            _spawn_snapshot(done)
+
+        return result
+
+    model.forward = _hooked_forward  # type: ignore[assignment]
 
     output_device = torch.device("cpu") if config.offload_to_cpu else None
 
@@ -173,8 +294,15 @@ def _run_inference_sync(
         peak = torch.cuda.max_memory_allocated() / 1024 / 1024
         print(f"GPU peak during inference: {peak:.1f}MB")
 
+    # Ensure the final progress value reflects total frames exactly.
+    progress_cb(total, total)
+
     image_shape = tuple(images_dev.shape)
     np_preds = _postprocess(predictions, image_shape)
+
+    # Release accumulators before freeing the model.
+    wp_accum.clear()
+    wpc_accum.clear()
 
     del model
     if device.type == "cuda":
@@ -196,6 +324,7 @@ async def run_inference(
         raise RuntimeError(f"No frames found in {frames_dir}")
 
     loop = asyncio.get_running_loop()
+    artifacts_dir = frames_dir.parent / "artifacts"
 
     def _progress(done: int, total: int) -> None:
         if total <= 0:
@@ -212,16 +341,38 @@ async def run_inference(
         except Exception:
             pass
 
+    def _partial(done: int, path: Path, points: int) -> None:
+        ev = JobEvent(
+            job_id=job_id,
+            stage="artifact",
+            message=f"partial point cloud @ frame {done}: {points:,} pts",
+            data={
+                "name": path.name,
+                "kind": "partial_ply",
+                "frames_done": done,
+                "points": points,
+            },
+        )
+        try:
+            asyncio.run_coroutine_threadsafe(_publish_async(publish, ev), loop)
+        except Exception:
+            pass
+
     def _sync_target():
         with capture_stdio(job_id, publish, "inference", loop):
             return _run_inference_sync(
-                frames, ckpt_path, config, _progress, vram_state
+                frames,
+                ckpt_path,
+                config,
+                _progress,
+                _partial,
+                artifacts_dir,
+                vram_state,
             )
 
     predictions, image_shape = await asyncio.to_thread(_sync_target)
 
-    # Cache the raw predictions so re-exports and mesh edits don't need GPU.
-    npz_path = frames_dir.parent / "artifacts" / "predictions.npz"
+    npz_path = artifacts_dir / "predictions.npz"
     npz_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         npz_path,

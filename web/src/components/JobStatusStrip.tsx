@@ -162,7 +162,13 @@ function StagesCell({ derived, wsStatus }: { derived: JobStatusDerived; wsStatus
         ))}
       </div>
       {derived.activeStage && (
-        <div className="mono-small" style={{ color: "var(--muted)" }}>
+        <div
+          className="latest-msg"
+          title={
+            derived.stages.find((s) => s.name === derived.activeStage)
+              ?.latest_message || ""
+          }
+        >
           {derived.stages.find((s) => s.name === derived.activeStage)
             ?.latest_message || "—"}
         </div>
