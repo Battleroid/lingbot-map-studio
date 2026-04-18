@@ -20,16 +20,29 @@ export function JobList() {
   const { data, error, isLoading } = useJobList();
   return (
     <div className="panel">
-      <div className="panel-header">jobs</div>
-      <div className="panel-body">
-        {isLoading && <div style={{ color: "var(--muted)" }}>loading...</div>}
+      <div className="panel-header">
+        <span>jobs</span>
+        {data && <span className="meta">{data.length}</span>}
+      </div>
+      <div className="panel-body" style={{ padding: 0 }}>
+        {isLoading && (
+          <div style={{ padding: "var(--pad)", color: "var(--muted)" }}>loading...</div>
+        )}
         {error && (
-          <div style={{ color: "var(--danger)" }}>
+          <div
+            style={{
+              padding: "var(--pad)",
+              color: "var(--danger)",
+              fontSize: "var(--fs-sm)",
+            }}
+          >
             error: {String((error as Error).message)}
           </div>
         )}
         {data && data.length === 0 && (
-          <div style={{ color: "var(--muted)" }}>no jobs yet</div>
+          <div style={{ padding: "var(--pad)", color: "var(--muted)" }}>
+            no jobs yet
+          </div>
         )}
         {data && data.length > 0 && (
           <table className="grid">
@@ -46,7 +59,7 @@ export function JobList() {
             <tbody>
               {data.map((j) => (
                 <tr key={j.id}>
-                  <td style={{ fontFamily: "var(--font-mono)" }}>{j.id}</td>
+                  <td>{j.id}</td>
                   <td>
                     <span className="chip" data-status={j.status}>
                       {j.status}
@@ -54,9 +67,7 @@ export function JobList() {
                   </td>
                   <td>{j.frames_total ?? "—"}</td>
                   <td>{j.artifact_count}</td>
-                  <td style={{ color: "var(--muted)" }}>
-                    {relTime(j.created_at)}
-                  </td>
+                  <td className="mono-small">{relTime(j.created_at)}</td>
                   <td>
                     <Link href={`/jobs/${j.id}`}>open</Link>
                   </td>

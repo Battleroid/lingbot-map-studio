@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import (
+    Body,
     FastAPI,
     File,
     Form,
@@ -22,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
-from app.jobs import runner, store
+from app.jobs import drafts, runner, store
 from app.jobs.events import bus
 from app.jobs.schema import (
     Artifact,
@@ -35,6 +36,7 @@ from app.jobs.schema import (
 from app.mesh.ops import apply_op, mesh_summary
 from app.pipeline.export import reexport
 from app.pipeline.inference import load_cached_predictions
+from app.pipeline.probe import probe_video, suggest_config
 from app.utils.logging import configure_logging
 from app.utils.paths import new_job_id, safe_filename
 
@@ -97,32 +99,107 @@ async def get_job(job_id: str) -> dict[str, Any]:
     return job.model_dump(mode="json")
 
 
-@app.post("/api/jobs", status_code=201)
-async def create_job(
+@app.post("/api/drafts", status_code=201)
+async def create_draft(
     videos: list[UploadFile] = File(...),
-    config: str = Form(...),
-) -> dict[str, str]:
-    try:
-        config_obj = JobConfig.model_validate_json(config)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"invalid config: {exc}") from exc
+) -> dict[str, Any]:
+    """Upload video(s), probe metadata via ffprobe, return inferred config.
 
+    The uploaded files are staged under /data/drafts/<id>/uploads. Call
+    POST /api/jobs with draft_id to launch inference; no re-upload required.
+    """
     if not videos:
         raise HTTPException(status_code=422, detail="at least one video required")
 
-    job_id = new_job_id()
-    uploads_dir = settings.job_uploads(job_id)
+    drafts.sweep_expired()
+    draft_id = new_job_id()
+    uploads_dir = drafts.draft_uploads(draft_id)
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    saved_paths: list[Path] = []
-    saved_names: list[str] = []
+    saved: list[Path] = []
     for f in videos:
         name = safe_filename(f.filename or "upload.mp4")
         target = uploads_dir / name
         with target.open("wb") as out:
             while chunk := await f.read(1024 * 1024):
                 out.write(chunk)
-        saved_paths.append(target)
-        saved_names.append(name)
+        saved.append(target)
+
+    probes: list[dict[str, Any]] = []
+    for path in saved:
+        try:
+            p = await probe_video(path)
+        except Exception as exc:  # noqa: BLE001
+            p = {"error": str(exc)}
+        p["name"] = path.name
+        probes.append(p)
+
+    suggested = suggest_config(probes)
+    rec = drafts.save_draft(draft_id, saved, probes, suggested)
+    return rec
+
+
+@app.get("/api/drafts/{draft_id}")
+async def get_draft(draft_id: str) -> dict[str, Any]:
+    rec = drafts.load_draft(draft_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    return rec
+
+
+@app.delete("/api/drafts/{draft_id}")
+async def drop_draft(draft_id: str) -> dict[str, bool]:
+    ok = drafts.delete_draft(draft_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="draft not found")
+    return {"deleted": True}
+
+
+@app.post("/api/jobs", status_code=201)
+async def create_job(
+    videos: list[UploadFile] | None = File(None),
+    config: str | None = Form(None),
+    draft_id: str | None = Form(None),
+) -> dict[str, str]:
+    try:
+        if not config:
+            raise HTTPException(status_code=422, detail="config is required")
+        config_obj = JobConfig.model_validate_json(config)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"invalid config: {exc}") from exc
+
+    job_id = new_job_id()
+    uploads_dir = settings.job_uploads(job_id)
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
+    saved_names: list[str] = []
+
+    if draft_id:
+        rec = drafts.load_draft(draft_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="draft not found")
+        sources = drafts.draft_video_paths(draft_id)
+        if not sources:
+            raise HTTPException(status_code=409, detail="draft has no uploaded files")
+        import shutil as _shutil
+        for src in sources:
+            target = uploads_dir / src.name
+            _shutil.move(str(src), str(target))
+            saved_paths.append(target)
+            saved_names.append(src.name)
+        drafts.delete_draft(draft_id)
+    elif videos:
+        for f in videos:
+            name = safe_filename(f.filename or "upload.mp4")
+            target = uploads_dir / name
+            with target.open("wb") as out:
+                while chunk := await f.read(1024 * 1024):
+                    out.write(chunk)
+            saved_paths.append(target)
+            saved_names.append(name)
+    else:
+        raise HTTPException(status_code=422, detail="videos or draft_id required")
 
     job = Job(id=job_id, status="queued", config=config_obj, uploads=saved_names)
     await store.create_job(job)

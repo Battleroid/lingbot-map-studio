@@ -39,31 +39,21 @@ export function LogStream({ events }: { events: JobEvent[] }) {
   }, [filtered, autoscroll]);
 
   return (
-    <div
-      className="panel"
-      style={{ display: "flex", flexDirection: "column", height: "100%" }}
-    >
-      <div
-        className="panel-header"
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
-      >
-        <span>log · {filtered.length}/{events.length}</span>
-        <label style={{ fontSize: 10, display: "flex", gap: 4, alignItems: "center" }}>
-          <input
-            type="checkbox"
-            checked={autoscroll}
-            onChange={(e) => setAutoscroll(e.target.checked)}
-          />
-          autoscroll
-        </label>
+    <div className="panel" style={{ height: "100%", border: "none" }}>
+      <div className="panel-header">
+        <span>log</span>
+        <span className="meta">
+          {filtered.length}/{events.length}
+        </span>
       </div>
       <div
         style={{
-          padding: "6px 10px",
+          padding: "5px 10px",
           borderBottom: "1px solid var(--rule)",
           display: "flex",
           flexWrap: "wrap",
           gap: 4,
+          alignItems: "center",
         }}
       >
         {ALL_LEVELS.slice()
@@ -74,22 +64,34 @@ export function LogStream({ events }: { events: JobEvent[] }) {
               type="button"
               data-pressed={enabled[lvl]}
               onClick={() => setEnabled({ ...enabled, [lvl]: !enabled[lvl] })}
-              style={{ fontSize: 10, padding: "1px 6px" }}
+              style={{ padding: "1px 6px", fontSize: "var(--fs-xs)" }}
             >
               {lvl}
             </button>
           ))}
+        <label
+          style={{
+            display: "flex",
+            gap: 4,
+            alignItems: "center",
+            marginLeft: "auto",
+            fontSize: "var(--fs-xs)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={autoscroll}
+            onChange={(e) => setAutoscroll(e.target.checked)}
+          />
+          autoscroll
+        </label>
       </div>
-      <div ref={scrollRef} className="log-stream panel-body" style={{ flex: 1 }}>
+      <div ref={scrollRef} className="log-stream">
         {filtered.map((ev) => (
-          <div
-            key={ev.id}
-            className="log-line"
-            data-level={ev.level}
-            style={{ paddingBottom: 1 }}
-          >
+          <div key={ev.id} className="log-line" data-level={ev.level}>
             <span style={{ color: "var(--muted)" }}>
-              [{ev.stage}] {ev.progress !== null ? `${(ev.progress * 100).toFixed(0)}% ` : ""}
+              [{ev.stage}]
+              {ev.progress !== null ? ` ${(ev.progress * 100).toFixed(0)}%` : ""}{" "}
             </span>
             {ev.message}
           </div>

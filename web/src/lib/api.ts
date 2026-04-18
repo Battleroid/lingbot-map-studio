@@ -37,17 +37,76 @@ export function getManifest(id: string): Promise<JobManifest> {
   return fetchJson(`/api/jobs/${id}/manifest`);
 }
 
-export async function createJob(
+export interface ProbeResult {
+  name: string;
+  fps: number | null;
+  duration_s: number | null;
+  width: number | null;
+  height: number | null;
+  codec: string | null;
+  pix_fmt: string | null;
+  bitrate: number | null;
+  total_frames: number | null;
+  container: string | null;
+  has_audio: boolean;
+  size_bytes: number | null;
+  error?: string;
+}
+
+export interface DraftRecord {
+  id: string;
+  created_at: number;
+  uploads: string[];
+  probes: ProbeResult[];
+  suggested_config: Partial<JobConfig>;
+}
+
+export async function createDraft(
   videos: File[],
+  onProgress?: (pct: number) => void,
+): Promise<DraftRecord> {
+  const fd = new FormData();
+  for (const f of videos) fd.append("videos", f, f.name);
+  return new Promise<DraftRecord>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/api/drafts`);
+    xhr.responseType = "text";
+    if (onProgress) {
+      xhr.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      });
+    }
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as DraftRecord);
+        } catch (err) {
+          reject(err);
+        }
+      } else {
+        reject(new Error(`draft upload failed: ${xhr.status} ${xhr.responseText}`));
+      }
+    });
+    xhr.addEventListener("error", () => reject(new Error("draft upload network error")));
+    xhr.send(fd);
+  });
+}
+
+export function deleteDraft(id: string): Promise<{ deleted: true }> {
+  return fetchJson(`/api/drafts/${id}`, { method: "DELETE" });
+}
+
+export async function startJobFromDraft(
+  draftId: string,
   config: JobConfig,
 ): Promise<{ id: string }> {
   const fd = new FormData();
-  for (const f of videos) fd.append("videos", f, f.name);
+  fd.append("draft_id", draftId);
   fd.append("config", JSON.stringify(config));
   const res = await fetch(`${API_BASE}/api/jobs`, { method: "POST", body: fd });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`upload failed: ${res.status} ${body}`);
+    throw new Error(`start failed: ${res.status} ${body}`);
   }
   return res.json();
 }

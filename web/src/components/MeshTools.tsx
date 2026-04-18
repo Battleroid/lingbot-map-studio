@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { Tip } from "@/components/Tip";
 import { meshEdit } from "@/lib/api";
 import type { MeshOp } from "@/lib/types";
 import { useViewerStore } from "@/lib/viewerStore";
@@ -10,6 +11,18 @@ interface Props {
   jobId: string;
   onRevision: (name: string) => void;
 }
+
+const TIPS: Record<MeshOp, string> = {
+  cull: "Delete the currently lasso-selected faces. Use to remove obvious sky, water, or reflection artifacts.",
+  fill_holes:
+    "Close triangle holes whose boundary is ≤ N edges. Too-large values can cap open surfaces with undesirable webs.",
+  decimate:
+    "Reduce triangle count using quadric edge collapse. Ratio 0.5 = halve faces. Preserves boundaries and normals.",
+  smooth:
+    "Laplacian smoothing, N iterations. Use to soften noisy point-map reconstructions; too many iterations shrinks detail.",
+  remove_small:
+    "Delete disconnected components smaller than N% of the mesh. Good for ripping out floating fragments.",
+};
 
 export function MeshTools({ jobId, onRevision }: Props) {
   const selection = useViewerStore((s) => s.selection);
@@ -25,11 +38,7 @@ export function MeshTools({ jobId, onRevision }: Props) {
     setBusy(op);
     setError(null);
     try {
-      const res = await meshEdit(jobId, {
-        op,
-        params,
-        face_indices: faces,
-      });
+      const res = await meshEdit(jobId, { op, params, face_indices: faces });
       onRevision(res.name);
       clearSelection();
     } catch (e) {
@@ -41,25 +50,31 @@ export function MeshTools({ jobId, onRevision }: Props) {
 
   return (
     <div className="panel">
-      <div className="panel-header">mesh tools</div>
+      <div className="panel-header">
+        <span>mesh tools</span>
+      </div>
       <div className="panel-body" style={{ display: "grid", gap: 8 }}>
-        <button
-          type="button"
-          disabled={busy !== null || selection.size === 0}
-          onClick={() => run("cull", {}, Array.from(selection))}
-        >
-          {busy === "cull" ? "culling..." : `cull (${selection.size})`}
-        </button>
+        <Tip text={TIPS.cull} showIcon={false}>
+          <button
+            type="button"
+            disabled={busy !== null || selection.size === 0}
+            onClick={() => run("cull", {}, Array.from(selection))}
+            style={{ width: "100%" }}
+          >
+            {busy === "cull" ? "culling..." : `cull (${selection.size})`}
+          </button>
+        </Tip>
 
         <label className="stat">
-          <span>fill holes (max size)</span>
+          <Tip text={TIPS.fill_holes}>
+            <span>fill holes (max size)</span>
+          </Tip>
           <input
             type="number"
             value={holeSize}
             min={5}
             max={500}
             onChange={(e) => setHoleSize(Number(e.target.value))}
-            style={{ width: 70, textAlign: "right" }}
           />
         </label>
         <button
@@ -71,7 +86,9 @@ export function MeshTools({ jobId, onRevision }: Props) {
         </button>
 
         <label className="stat">
-          <span>decimate ratio</span>
+          <Tip text={TIPS.decimate}>
+            <span>decimate ratio</span>
+          </Tip>
           <input
             type="number"
             step={0.05}
@@ -79,7 +96,6 @@ export function MeshTools({ jobId, onRevision }: Props) {
             max={0.95}
             value={decimateRatio}
             onChange={(e) => setDecimateRatio(Number(e.target.value))}
-            style={{ width: 70, textAlign: "right" }}
           />
         </label>
         <button
@@ -91,14 +107,15 @@ export function MeshTools({ jobId, onRevision }: Props) {
         </button>
 
         <label className="stat">
-          <span>smooth iters</span>
+          <Tip text={TIPS.smooth}>
+            <span>smooth iters</span>
+          </Tip>
           <input
             type="number"
             min={1}
             max={20}
             value={smoothIters}
             onChange={(e) => setSmoothIters(Number(e.target.value))}
-            style={{ width: 70, textAlign: "right" }}
           />
         </label>
         <button
@@ -110,7 +127,9 @@ export function MeshTools({ jobId, onRevision }: Props) {
         </button>
 
         <label className="stat">
-          <span>remove small (% faces)</span>
+          <Tip text={TIPS.remove_small}>
+            <span>remove small (% faces)</span>
+          </Tip>
           <input
             type="number"
             min={0.1}
@@ -118,7 +137,6 @@ export function MeshTools({ jobId, onRevision }: Props) {
             step={0.5}
             value={smallPct}
             onChange={(e) => setSmallPct(Number(e.target.value))}
-            style={{ width: 70, textAlign: "right" }}
           />
         </label>
         <button
@@ -129,7 +147,9 @@ export function MeshTools({ jobId, onRevision }: Props) {
           {busy === "remove_small" ? "removing..." : "remove small"}
         </button>
 
-        {error && <div style={{ color: "var(--danger)", fontSize: 11 }}>{error}</div>}
+        {error && (
+          <div style={{ color: "var(--danger)", fontSize: "var(--fs-xs)" }}>{error}</div>
+        )}
       </div>
     </div>
   );

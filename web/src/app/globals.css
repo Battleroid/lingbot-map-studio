@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Optional Berkeley Mono — drop a licensed woff2 at public/fonts/berkeley-mono.woff2
-   and it will be picked up automatically. Missing file = graceful fallback to Roboto Mono. */
 @font-face {
   font-family: "Berkeley Mono";
   src: url("/fonts/berkeley-mono.woff2") format("woff2");
@@ -13,15 +11,33 @@
 }
 
 :root {
+  /* Palette */
   --bg: #ffffff;
   --fg: #000000;
-  --muted: #6b6b6b;
-  --soft: #f2f2f2;
+  --soft: #f4f4f4;
+  --soft-2: #e8e8e8;
+  --muted: #5c5c5c;
   --rule: #000000;
-  --warn: #000000;
   --danger: #8a0000;
+
+  /* Typography — strict scale, used everywhere. */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 16px;
+  --lh: 1.4;
+
+  --pad: 10px;
+  --pad-sm: 6px;
+
   --font-mono: "Berkeley Mono", var(--font-roboto-mono), "Roboto Mono", ui-monospace,
     "SFMono-Regular", Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html,
@@ -29,24 +45,26 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh);
   font-feature-settings: "ss01", "ss02", "cv02";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-}
-
-* {
-  box-sizing: border-box;
+  margin: 0;
+  min-height: 100vh;
 }
 
 button {
   font: inherit;
+  font-size: var(--fs-sm);
   color: inherit;
-  background: transparent;
+  background: var(--bg);
   border: 1px solid var(--rule);
   padding: 4px 10px;
   cursor: pointer;
   text-transform: lowercase;
   letter-spacing: 0.02em;
+  line-height: 1.2;
 }
 
 button:hover:not(:disabled) {
@@ -58,6 +76,7 @@ button:disabled {
   color: var(--muted);
   border-color: var(--muted);
   cursor: not-allowed;
+  background: var(--bg);
 }
 
 button[data-pressed="true"] {
@@ -71,10 +90,12 @@ input[type="file"],
 select,
 textarea {
   font: inherit;
+  font-size: var(--fs-sm);
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--rule);
-  padding: 4px 8px;
+  padding: 3px 6px;
+  line-height: 1.2;
 }
 
 input[type="range"] {
@@ -99,33 +120,60 @@ hr,
   margin: 0;
 }
 
+/* Panels — inverted headers for high contrast. */
 .panel {
   border: 1px solid var(--rule);
   background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .panel-header {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--rule);
+  padding: 5px 10px;
+  background: var(--fg);
+  color: var(--bg);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 11px;
+  letter-spacing: 0.08em;
+  font-size: var(--fs-xs);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-header .meta {
+  color: var(--bg);
+  opacity: 0.7;
+  font-size: var(--fs-xs);
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .panel-body {
-  padding: 10px;
+  padding: var(--pad);
+  font-size: var(--fs-sm);
+  min-height: 0;
 }
 
+.panel-body.dense {
+  padding: 6px 10px;
+}
+
+/* Chips — job status, ws state, etc. */
 .chip {
   display: inline-block;
   padding: 1px 6px;
   border: 1px solid var(--rule);
   text-transform: lowercase;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   letter-spacing: 0.04em;
+  line-height: 1.25;
+  background: var(--bg);
 }
 
-.chip[data-status="ready"] {
+.chip[data-status="ready"],
+.chip[data-status="open"] {
   background: var(--fg);
   color: var(--bg);
 }
@@ -139,17 +187,41 @@ hr,
 .chip[data-status="inference"],
 .chip[data-status="ingest"],
 .chip[data-status="export"],
-.chip[data-status="queued"] {
+.chip[data-status="queued"],
+.chip[data-status="connecting"] {
   background: var(--soft);
 }
 
+/* Stat rows — config fields and metrics */
+.stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+  font-size: var(--fs-sm);
+}
+
+.stat > span:first-child {
+  color: var(--muted);
+}
+
+.stat input,
+.stat select {
+  min-width: 80px;
+  text-align: right;
+}
+
+/* Log pane */
 .log-stream {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.35;
   white-space: pre-wrap;
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg);
+  padding: var(--pad);
+  flex: 1;
 }
 
 .log-line[data-level="error"] {
@@ -165,10 +237,7 @@ hr,
   color: var(--muted);
 }
 
-.log-line[data-level="stdout"] {
-  color: var(--fg);
-}
-
+.log-line[data-level="stdout"],
 .log-line[data-level="info"] {
   color: var(--fg);
 }
@@ -181,7 +250,6 @@ hr,
   height: 6px;
   background: var(--soft);
   border: 1px solid var(--rule);
-  position: relative;
 }
 
 .progress-bar > span {
@@ -193,9 +261,11 @@ hr,
 
 .dropzone {
   border: 1px dashed var(--rule);
-  padding: 20px;
+  padding: 30px 20px;
   text-align: center;
   cursor: pointer;
+  background: var(--bg);
+  font-size: var(--fs-sm);
 }
 
 .dropzone[data-active="true"] {
@@ -203,20 +273,26 @@ hr,
   color: var(--bg);
 }
 
-.stat {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 2px 0;
+.dropzone .primary {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: var(--fs-xs);
 }
 
-.stat > span:first-child {
+.dropzone .secondary {
+  margin-top: 6px;
   color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.dropzone[data-active="true"] .secondary {
+  color: var(--bg);
 }
 
 table.grid {
   width: 100%;
   border-collapse: collapse;
+  font-size: var(--fs-sm);
 }
 
 table.grid th,
@@ -229,6 +305,214 @@ table.grid td {
 
 table.grid th {
   text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  background: var(--fg);
+  color: var(--bg);
+  border-bottom-color: var(--fg);
+}
+
+table.grid tr:last-child td {
+  border-bottom: none;
+}
+
+/* Tooltip — pure CSS, no JS runtime cost. Hover on .tip-target reveals
+   its ::after. Supports multi-line via whitespace: pre-line. */
+.tip-target {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: help;
+}
+
+.tip-target::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  background: var(--fg);
+  color: var(--bg);
+  padding: 6px 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  max-width: 280px;
+  width: max-content;
+  white-space: pre-line;
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 120ms linear, transform 120ms linear;
+  box-shadow: 0 2px 0 var(--fg);
+}
+
+.tip-target:hover::after,
+.tip-target:focus::after,
+.tip-target:focus-within::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.tip-icon {
+  border: 1px solid var(--rule);
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+  user-select: none;
+}
+
+.tip-target:hover .tip-icon {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+
+/* Headings */
+.page-title {
+  font-size: var(--fs-lg);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin: 0;
+}
+
+.section-title {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.mono-small {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* Layout scaffolding */
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--bg);
+}
+
+.app-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 16px;
+}
+
+@media (min-width: 1400px) {
+  .app-main {
+    padding: 20px 28px;
+  }
+}
+
+/* Job page — fluid three-column grid with full-bleed viewer. */
+.job-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr minmax(320px, 420px);
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+@media (max-width: 1100px) {
+  .job-shell {
+    grid-template-columns: minmax(260px, 320px) 1fr minmax(280px, 340px);
+  }
+}
+
+@media (max-width: 900px) {
+  .job-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr auto;
+    height: auto;
+    min-height: 100vh;
+  }
+}
+
+.job-header {
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--bg);
+}
+
+.job-side {
+  overflow-y: auto;
+  border-right: 1px solid var(--rule);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg);
+  min-height: 0;
+}
+
+.job-side.right {
+  border-right: none;
+  border-left: 1px solid var(--rule);
+  padding: 0;
+  overflow: hidden;
+}
+
+.job-center {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  background: var(--bg);
+}
+
+@media (max-width: 900px) {
+  .job-side {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  .job-side.right {
+    border-left: none;
+    border-top: 1px solid var(--rule);
+  }
+  .job-center {
+    min-height: 60vh;
+  }
+}
+
+/* Home page — responsive, fluid */
+.home-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+}
+
+@media (max-width: 1000px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

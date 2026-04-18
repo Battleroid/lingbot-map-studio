@@ -8,7 +8,7 @@ interface Props {
   disabled?: boolean;
 }
 
-const VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"];
+const VIDEO_EXT = /\.(mp4|mov|mkv|webm|avi)$/i;
 
 export function UploadDropzone({ files, onChange, disabled }: Props) {
   const [active, setActive] = useState(false);
@@ -17,7 +17,7 @@ export function UploadDropzone({ files, onChange, disabled }: Props) {
   const addFiles = useCallback(
     (incoming: FileList | File[]) => {
       const list = Array.from(incoming).filter(
-        (f) => f.type.startsWith("video/") || VIDEO_TYPES.includes(f.type) || /\.(mp4|mov|mkv|webm|avi)$/i.test(f.name),
+        (f) => f.type.startsWith("video/") || VIDEO_EXT.test(f.name),
       );
       if (!list.length) return;
       onChange([...files, ...list]);
@@ -43,12 +43,8 @@ export function UploadDropzone({ files, onChange, disabled }: Props) {
           addFiles(e.dataTransfer.files);
         }}
       >
-        <div style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontSize: 11 }}>
-          drop video(s)
-        </div>
-        <div style={{ marginTop: 6, color: "var(--muted)", fontSize: 11 }}>
-          mp4 · mov · mkv · webm — order = scene order
-        </div>
+        <div className="primary">drop video(s)</div>
+        <div className="secondary">mp4 · mov · mkv · webm — order = scene order</div>
         <input
           ref={inputRef}
           type="file"

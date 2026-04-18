@@ -35,38 +35,21 @@ export default function JobPage({ params }: Props) {
   const plyUrl = plyName ? artifactUrl(id, plyName) : null;
 
   return (
-    <main
-      style={{
-        display: "grid",
-        gridTemplateColumns: "300px 1fr 340px",
-        gridTemplateRows: "auto 1fr",
-        height: "100vh",
-        overflow: "hidden",
-      }}
-    >
-      <header
-        style={{
-          gridColumn: "1 / -1",
-          borderBottom: "1px solid var(--rule)",
-          padding: "8px 16px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
-          <Link href="/" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontSize: 12 }}>
+    <div className="job-shell">
+      <header className="job-header">
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <Link href="/" className="page-title" style={{ textDecoration: "none" }}>
             · studio
           </Link>
-          <div style={{ fontSize: 12 }}>job {id}</div>
+          <span className="mono-small">job {id}</span>
           <span className="chip" data-status={manifest?.status ?? "queued"}>
             {manifest?.status ?? "queued"}
           </span>
-          <span className="chip" data-status={status === "open" ? "ready" : "failed"}>
+          <span className="chip" data-status={status}>
             ws {status}
           </span>
         </div>
-        <div style={{ flex: 1, maxWidth: 240, marginLeft: 16 }}>
+        <div style={{ flex: "0 1 280px", minWidth: 180 }}>
           <div className="progress-bar">
             <span
               style={{
@@ -74,22 +57,13 @@ export default function JobPage({ params }: Props) {
               }}
             />
           </div>
-          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+          <div className="mono-small" style={{ marginTop: 2 }}>
             {latestStage ?? "—"}
           </div>
         </div>
       </header>
 
-      <aside
-        style={{
-          borderRight: "1px solid var(--rule)",
-          overflowY: "auto",
-          padding: 10,
-          display: "grid",
-          gap: 10,
-          alignContent: "start",
-        }}
-      >
+      <aside className="job-side">
         {manifest && (
           <ConfigPanel
             config={manifest.config}
@@ -102,15 +76,23 @@ export default function JobPage({ params }: Props) {
           jobId={id}
           artifacts={manifest?.artifacts ?? []}
           latestMesh={activeMeshName}
-          onReexport={(name) => setMeshOverride(name.endsWith(".glb") ? name : activeMeshName)}
+          onReexport={(name) =>
+            setMeshOverride(name.endsWith(".glb") ? name : activeMeshName)
+          }
         />
         <MeshTools jobId={id} onRevision={setMeshOverride} />
         {manifest?.error && (
           <div className="panel">
-            <div className="panel-header">error</div>
+            <div className="panel-header">
+              <span>error</span>
+            </div>
             <div
               className="panel-body"
-              style={{ fontSize: 11, whiteSpace: "pre-wrap", color: "var(--danger)" }}
+              style={{
+                fontSize: "var(--fs-xs)",
+                whiteSpace: "pre-wrap",
+                color: "var(--danger)",
+              }}
             >
               {manifest.error}
             </div>
@@ -118,23 +100,16 @@ export default function JobPage({ params }: Props) {
         )}
       </aside>
 
-      <section style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <section className="job-center">
         <ViewerControls />
-        <div style={{ flex: 1, position: "relative" }}>
+        <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
           <ViewerCanvas glbUrl={glbUrl} plyUrl={plyUrl} />
         </div>
       </section>
 
-      <aside
-        style={{
-          borderLeft: "1px solid var(--rule)",
-          overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <aside className="job-side right">
         <LogStream events={events} />
       </aside>
-    </main>
+    </div>
   );
 }
