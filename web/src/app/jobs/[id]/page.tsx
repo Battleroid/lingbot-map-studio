@@ -29,6 +29,7 @@ export default function JobPage({ params }: Props) {
   const derived = useJobStatus(events, manifest?.status);
   const [meshOverride, setMeshOverride] = useState<string | null>(null);
   const [busy, setBusy] = useState<"stop" | "restart" | null>(null);
+  const [stopRequestedAt, setStopRequestedAt] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const jobStatus = manifest?.status;
@@ -43,8 +44,13 @@ export default function JobPage({ params }: Props) {
   async function onStop() {
     setBusy("stop");
     setActionError(null);
+    // If the first graceful stop was >3s ago and the job is still running,
+    // a second click escalates to force-stop.
+    const shouldForce =
+      stopRequestedAt !== null && Date.now() - stopRequestedAt > 3000;
     try {
-      await stopJob(id);
+      await stopJob(id, shouldForce);
+      if (!shouldForce) setStopRequestedAt(Date.now());
     } catch (e) {
       setActionError(String((e as Error).message));
     } finally {
@@ -123,8 +129,17 @@ export default function JobPage({ params }: Props) {
               type="button"
               disabled={busy !== null}
               onClick={onStop}
+              title={
+                stopRequestedAt === null
+                  ? "Request graceful cancellation at the next checkpoint"
+                  : "Force-abandon — marks cancelled even if the GPU call is hung"
+              }
             >
-              {busy === "stop" ? "stopping…" : "stop"}
+              {busy === "stop"
+                ? "stopping…"
+                : stopRequestedAt === null
+                  ? "stop"
+                  : "force stop"}
             </button>
           )}
           {isTerminal && manifest && (

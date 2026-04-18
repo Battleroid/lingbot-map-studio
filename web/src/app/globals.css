@@ -331,9 +331,8 @@ hr,
   color: var(--muted);
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* overflow clipping is handled on the inner label span (see .tip-target
+     rule above) so the tooltip ::after isn't clipped. */
 }
 
 .stat input,
@@ -500,13 +499,18 @@ table.dtable tr:last-child td {
   cursor: help;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  /* NO `overflow: hidden` here — it would clip the absolute-positioned
+     ::after tooltip. Clipping happens on the inner label span instead. */
 }
 
 .tip-target > span:not(.tip-icon) {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: middle;
 }
 
 .tip-target::after {

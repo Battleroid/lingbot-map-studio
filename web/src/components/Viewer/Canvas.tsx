@@ -32,35 +32,24 @@ function AxesAndGrid() {
 }
 
 /**
- * Sits inside <Bounds> and triggers a refresh+fit whenever:
- *   - the active URL(s) change (new geometry loaded)
- *   - the user clicks "recenter" (refitSignal ticks up)
- *   - the render mode changes (different layer becomes visible)
- *
- * Without this, drei's Bounds only fits once on mount; Suspense-resolved
- * children that arrive late don't trigger a refit, which is why opening a
- * completed job or receiving a new partial PLY could look empty.
+ * Re-fits the camera when the user clicks "recenter". Per-mount initial fit
+ * is handled inside PointCloud / MeshLayer — those only fire once per mount,
+ * so partial updates during live inference don't steal the user's orbit.
  */
-function RefitController({
-  urlKey,
-  mode,
-}: {
-  urlKey: string;
-  mode: string;
-}) {
+function RefitController() {
   const bounds = useBounds();
   const signal = useViewerStore((s) => s.refitSignal);
   useEffect(() => {
-    // Defer to next animation frame so Bounds sees the newly-added meshes.
+    if (signal === 0) return; // skip initial render; user hasn't requested refit
     const id = requestAnimationFrame(() => {
       try {
         bounds.refresh().clip().fit();
       } catch {
-        /* Bounds may not be ready yet on very first render */
+        /* Bounds not ready */
       }
     });
     return () => cancelAnimationFrame(id);
-  }, [bounds, urlKey, mode, signal]);
+  }, [bounds, signal]);
   return null;
 }
 
@@ -71,8 +60,6 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
 
   const showPoints = mode === "points" || mode === "points-color";
   const showMesh = mode === "mesh" || mode === "wireframe";
-
-  const urlKey = `${showMesh ? glbUrl ?? "" : ""}|${showPoints ? plyUrl ?? "" : ""}`;
 
   const cameraProps = useMemo(
     () => ({
@@ -92,8 +79,12 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
         <directionalLight position={[5, 8, 3]} intensity={0.9} />
         <Suspense fallback={null}>
           <AxesAndGrid />
-          <Bounds fit clip observe margin={1.3}>
-            <RefitController urlKey={urlKey} mode={mode} />
+          {/* Bounds without `fit` = provide the useBounds context only; never
+              fit on mount (which would fit on infinite grid before geometry
+              arrives, causing the camera to zoom to ∞). Initial fit is
+              triggered by PointCloud/MeshLayer once their geometry loads. */}
+          <Bounds clip observe margin={1.3}>
+            <RefitController />
             {showMesh && glbUrl && (
               <MeshLayer url={glbUrl} wireframe={mode === "wireframe"} />
             )}

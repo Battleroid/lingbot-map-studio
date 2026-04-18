@@ -115,8 +115,12 @@ export function deleteJob(id: string): Promise<{ deleted: true }> {
   return fetchJson(`/api/jobs/${id}`, { method: "DELETE" });
 }
 
-export function stopJob(id: string): Promise<{ cancelled: true }> {
-  return fetchJson(`/api/jobs/${id}/stop`, { method: "POST" });
+export function stopJob(
+  id: string,
+  force = false,
+): Promise<{ cancelled: true; forced: boolean }> {
+  const qs = force ? "?force=true" : "";
+  return fetchJson(`/api/jobs/${id}/stop${qs}`, { method: "POST" });
 }
 
 export function restartJob(id: string): Promise<{ id: string }> {

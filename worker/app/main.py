@@ -458,21 +458,46 @@ async def delete_job(job_id: str, force: bool = False) -> dict[str, Any]:
 
 
 @app.post("/api/jobs/{job_id}/stop")
-async def stop_job(job_id: str) -> dict[str, Any]:
+async def stop_job(job_id: str, force: bool = False) -> dict[str, Any]:
     """Request cancellation of a running job.
 
-    Flips a shared flag that the inference hook + ingest/export checkpoints
-    watch for. The job will unwind cleanly and land in status=cancelled.
+    Graceful (default): flips a shared cancel flag. The inference hook +
+    ingest/export checkpoints watch for it and raise JobCancelled on next
+    check, so the job unwinds cleanly and lands in status=cancelled.
+
+    Force (`?force=true`): immediately marks the job row as cancelled in the
+    DB and drops the cancel token. Use this when the worker is genuinely hung
+    inside a CUDA call and the graceful path never returns — the underlying
+    thread may keep running in the background but the UI state is consistent
+    and the job becomes deletable. The orphan sweep on next worker restart
+    tidies up the real task.
     """
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in {"ready", "failed", "cancelled"}:
         raise HTTPException(status_code=409, detail="job already finished")
-    ok = cancel_mod.cancel(job_id, "stopped by user")
-    if not ok:
-        # Token vanished (e.g. job just finished between status read and now).
-        raise HTTPException(status_code=409, detail="job not active")
+
+    cancel_mod.cancel(job_id, "stopped by user")
+
+    if force:
+        await store.update_job(
+            job_id,
+            status="cancelled",
+            error="force-stopped by user (GPU task may still be running in the background — a worker restart will fully clean it up)",
+        )
+        cancel_mod.drop_token(job_id)
+        await bus.publish(
+            JobEvent(
+                job_id=job_id,
+                stage="system",
+                level="warn",
+                message="force-stopped — marked cancelled regardless of task state",
+            )
+        )
+        await bus.close(job_id)
+        return {"cancelled": True, "forced": True}
+
     await bus.publish(
         JobEvent(
             job_id=job_id,
@@ -481,7 +506,7 @@ async def stop_job(job_id: str) -> dict[str, Any]:
             message="stop requested — unwinding current stage...",
         )
     )
-    return {"cancelled": True}
+    return {"cancelled": True, "forced": False}
 
 
 @app.post("/api/jobs/{job_id}/restart", status_code=201)
