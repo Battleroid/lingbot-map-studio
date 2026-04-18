@@ -24,12 +24,16 @@ interface Props {
 function AxesAndGrid() {
   return (
     <>
+      {/* fadeDistance is relative to the camera. Large here because
+          reconstructed scenes can span hundreds of units and a tight value
+          makes the grid invisible once the camera is far from origin. */}
       <Grid
         args={[40, 40]}
         cellColor="#cccccc"
         sectionColor="#000000"
         sectionThickness={1}
-        fadeDistance={40}
+        fadeDistance={2000}
+        fadeStrength={2}
         infiniteGrid
       />
       <axesHelper args={[1]} />
@@ -62,6 +66,7 @@ function RefitController() {
 export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
   const mode = useViewerStore((s) => s.mode);
   const cameraMode = useViewerStore((s) => s.cameraMode);
+  const refitSignal = useViewerStore((s) => s.refitSignal);
   const lassoActive = useViewerStore((s) => s.lassoActive);
   const controls = useRef<OrbitControlsImpl>(null);
 
@@ -110,7 +115,11 @@ export function ViewerCanvas({ glbUrl, plyUrl }: Props) {
             dampingFactor={0.08}
           />
         ) : (
+          // Key on refitSignal so a recenter click fully remounts FlyControls
+          // and it picks up the camera's freshly-set pitch/yaw/position
+          // instead of overwriting them from its stale internal state.
           <FlyControls
+            key={`fly-${refitSignal}`}
             makeDefault
             movementSpeed={2}
             rollSpeed={0.6}
