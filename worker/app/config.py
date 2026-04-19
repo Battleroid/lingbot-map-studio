@@ -44,6 +44,33 @@ class Settings(BaseSettings):
     # job-level cap. Defaults to $50.
     cloud_cost_cap_cents_default: int = 5000
 
+    # --- Per-provider credentials (Phase R2+). ---
+    # Each provider adapter reads only the fields it needs; unset
+    # fields leave that provider unregistered (its import-time self-
+    # registration checks the key and bails if missing). This keeps
+    # the fake provider the only one available in a fresh dev install
+    # so tests + CI stay lean.
+    runpod_api_key: str = ""
+    runpod_api_base: str = "https://rest.runpod.io/v1"
+    # Vast.ai — account-level API key.
+    vast_api_key: str = ""
+    vast_api_base: str = "https://console.vast.ai/api/v0"
+    # Lambda Labs — account-level API key.
+    lambda_labs_api_key: str = ""
+    lambda_labs_api_base: str = "https://cloud.lambdalabs.com/api/v1"
+    # Paperspace — account-level API key. Gradient + Core share auth.
+    paperspace_api_key: str = ""
+    paperspace_api_base: str = "https://api.paperspace.io"
+    # AWS / GCP / Azure lean on their own SDKs for credentials; the
+    # URLs below are only for SDK overrides (LocalStack, private
+    # endpoints, gov-cloud). Empty = use SDK defaults.
+    aws_endpoint_url: str = ""
+    aws_region_default: str = "us-east-1"
+    gcp_service_account_json: str = ""
+    gcp_region_default: str = "us-central1"
+    azure_subscription_id: str = ""
+    azure_region_default: str = "eastus"
+
     model_config = SettingsConfigDict(env_file=None, case_sensitive=False)
 
     def ensure_dirs(self) -> None:
