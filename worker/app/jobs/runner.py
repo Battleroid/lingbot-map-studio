@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import traceback
 from pathlib import Path
@@ -10,12 +9,10 @@ from app.jobs import cancel as cancel_mod
 from app.jobs import store
 from app.jobs.cancel import JobCancelled
 from app.jobs.events import bus
-from app.jobs.schema import Artifact, JobConfig, JobEvent
-from app.pipeline.checkpoints import ensure_checkpoint
-from app.pipeline.export import export_reconstruction
-from app.pipeline.ingest import concat_videos_to_frames
-from app.pipeline.inference import run_inference
-from app.pipeline.watchdog import VramLimitExceeded, VramWatchState, run_vram_watchdog
+from app.jobs.schema import AnyJobConfig, JobEvent, JobStatus
+from app.pipeline.watchdog import VramLimitExceeded
+from app.processors import resolve
+from app.processors.base import JobContext
 
 log = logging.getLogger(__name__)
 
@@ -24,114 +21,55 @@ async def _publish(event: JobEvent) -> JobEvent:
     return await bus.publish(event)
 
 
-async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
+async def run_job(job_id: str, uploads: list[Path], config: AnyJobConfig) -> None:
+    """Run a single job to completion by dispatching to the processor matching
+    `config.processor`.
+
+    The runner owns DB state transitions, cancellation bookkeeping, and the
+    error-handling fan-out (OOM / cancelled / watchdog / general failure).
+    Processors are pure: they publish events, do work, and return the
+    artifacts they produced.
+    """
+
     job_dir = settings.job_dir(job_id)
     frames_dir = settings.job_frames(job_id)
     artifacts_dir = settings.job_artifacts(job_id)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     cancel_token = cancel_mod.get_token(job_id)
 
-    def _check_cancel() -> None:
-        if cancel_token.cancelled:
-            raise JobCancelled(cancel_token.reason)
+    async def _set_status(status: JobStatus) -> None:
+        await store.update_job(job_id, status=status)
+
+    async def _set_frames_total(frames_total: int) -> None:
+        await store.update_job(job_id, frames_total=frames_total)
+
+    ctx = JobContext(
+        job_id=job_id,
+        uploads=uploads,
+        config=config,
+        job_dir=job_dir,
+        frames_dir=frames_dir,
+        artifacts_dir=artifacts_dir,
+        cancel=cancel_token,
+        publish=_publish,
+        set_status=_set_status,
+        set_frames_total=_set_frames_total,
+    )
 
     try:
-        await _publish(JobEvent(job_id=job_id, stage="queue", message="job starting"))
-        _check_cancel()
+        processor = resolve(config)
+        result = await processor.run(ctx)
 
-        # 1. ingest
-        await store.update_job(job_id, status="ingest")
-        frames_total = await concat_videos_to_frames(
-            job_id=job_id,
-            sources=uploads,
-            dest=frames_dir,
-            config=config,
-            publish=_publish,
-        )
-        await store.update_job(job_id, frames_total=frames_total)
-        _check_cancel()
-
-        # 2. checkpoint
-        ckpt = await ensure_checkpoint(config.model_id, job_id, _publish)
-        _check_cancel()
-
-        # 3. inference — spin up a VRAM watchdog alongside the GPU call.
-        await store.update_job(job_id, status="inference")
-        soft_limit = config.vram_soft_limit_gb or settings.vram_default_soft_limit_gb
-        vram_state = VramWatchState(soft_limit_gb=float(soft_limit))
-        watchdog_task = asyncio.create_task(
-            run_vram_watchdog(job_id, vram_state, _publish)
-        )
-        try:
-            predictions = await run_inference(
-                job_id=job_id,
-                frames_dir=frames_dir,
-                ckpt_path=ckpt,
-                config=config,
-                publish=_publish,
-                vram_state=vram_state,
-                cancel_token=cancel_token,
-            )
-        finally:
-            vram_state.stop()
-            try:
-                await asyncio.wait_for(watchdog_task, timeout=5.0)
-            except asyncio.TimeoutError:
-                watchdog_task.cancel()
-        _check_cancel()
-        await _publish(
-            JobEvent(
-                job_id=job_id,
-                stage="inference",
-                message=(
-                    f"vram peak {vram_state.peak_gb:.2f} GB "
-                    f"(soft limit {vram_state.soft_limit_gb:.1f} GB)"
-                ),
-                data={
-                    "vram_peak_gb": round(vram_state.peak_gb, 3),
-                    "vram_soft_limit_gb": vram_state.soft_limit_gb,
-                },
-            )
-        )
-
-        # 4. export
-        await store.update_job(job_id, status="export")
-        artifacts = await export_reconstruction(
-            job_id=job_id,
-            frames_dir=frames_dir,
-            artifacts_dir=artifacts_dir,
-            predictions=predictions,
-            config=config,
-            publish=_publish,
-        )
-
-        art_list = []
-        for name, path in artifacts.items():
-            art_list.append(
-                Artifact(
-                    name=path.name,
-                    kind=name,  # type: ignore[arg-type]
-                    size_bytes=path.stat().st_size,
-                )
-            )
-        # Also surface the cached predictions npz so the UI can see it.
-        npz = artifacts_dir / "predictions.npz"
-        if npz.exists():
-            art_list.append(
-                Artifact(
-                    name=npz.name,
-                    kind="npz",
-                    size_bytes=npz.stat().st_size,
-                )
-            )
-
-        await store.update_job(job_id, status="ready", artifacts=art_list)
+        await store.update_job(job_id, status="ready", artifacts=result.artifacts)
         await _publish(
             JobEvent(
                 job_id=job_id,
                 stage="system",
                 message="job ready",
-                data={"artifacts": [a.name for a in art_list]},
+                data={
+                    "artifacts": [a.name for a in result.artifacts],
+                    **result.extras,
+                },
             )
         )
     except JobCancelled as exc:
@@ -204,9 +142,6 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 )
             )
         else:
-            # Any other exception: log and mark failed with the full traceback
-            # so the UI shows it instead of silently leaving the job in
-            # whatever status it was when it crashed.
             log.exception("job %s failed", job_id)
             tb = traceback.format_exc()
             await store.update_job(
@@ -223,19 +158,6 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                     data={"traceback": tb},
                 )
             )
-    except Exception as exc:  # noqa: BLE001
-        log.exception("job %s failed", job_id)
-        tb = traceback.format_exc()
-        await store.update_job(job_id, status="failed", error=f"{exc}\n\n{tb}")
-        await _publish(
-            JobEvent(
-                job_id=job_id,
-                stage="system",
-                level="error",
-                message=f"job failed: {exc}",
-                data={"traceback": tb},
-            )
-        )
     finally:
         cancel_mod.drop_token(job_id)
         await bus.close(job_id)

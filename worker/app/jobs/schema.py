@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 JobStatus = Literal[
-    "queued", "ingest", "inference", "export", "ready", "failed", "cancelled"
+    "queued",
+    "ingest",
+    "inference",
+    "export",
+    "slam",
+    "meshing",
+    "training",
+    "ready",
+    "failed",
+    "cancelled",
 ]
 EventLevel = Literal["info", "warn", "error", "stdout", "stderr", "debug"]
 EventStage = Literal[
@@ -14,10 +24,40 @@ EventStage = Literal[
     "ingest",
     "checkpoint",
     "inference",
+    "slam",
+    "training",
+    "meshing",
     "export",
     "mesh",
     "artifact",
     "system",
+]
+
+ProcessorId = Literal[
+    "lingbot",
+    "droid_slam",
+    "mast3r_slam",
+    "dpvo",
+    "monogs",
+    "gsplat",
+]
+SlamBackend = Literal["droid_slam", "mast3r_slam", "dpvo", "monogs"]
+ProcessorKind = Literal["reconstruction", "slam", "gsplat"]
+
+# Widened to cover all future modes. Artifact.kind is free-form string in
+# practice — the UI keys off suffix — but we enumerate the known kinds so the
+# viewer + tool panel code has exhaustive switches to hang off of.
+ArtifactKind = Literal[
+    "glb",
+    "ply",
+    "obj",
+    "npz",
+    "json",
+    # SLAM / GS additions (kinds used from Phase 4 / Phase 5 onward).
+    "splat_ply",
+    "splat_sogs",
+    "pose_graph_json",
+    "keyframes_jsonl",
 ]
 
 
@@ -25,8 +65,14 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class JobConfig(BaseModel):
+class LingbotConfig(BaseModel):
+    """Config for the existing dense-pointmap model. Unchanged from the
+    original JobConfig — a `processor` discriminator is added so it can
+    participate in the AnyJobConfig union."""
+
     model_config = ConfigDict(protected_namespaces=())
+
+    processor: Literal["lingbot"] = "lingbot"
 
     model_id: str = "lingbot-map"
     mode: Literal["streaming", "windowed"] = "streaming"
@@ -85,9 +131,106 @@ class JobConfig(BaseModel):
     partial_snapshot_every: int = 60
 
 
+class SlamConfig(BaseModel):
+    """Stub for SLAM-mode jobs. Implemented in Phase 4 — this shape is the
+    minimum the discriminated-union router + UI need to dispatch to the right
+    backend. Per-backend tunables are added alongside each processor."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    processor: SlamBackend
+    # Most SLAM backends publish a ply + pose graph; the shared fields below
+    # cover the common ingest/keyframe/calibration knobs. Per-backend configs
+    # extend this in Phase 4.
+    max_frames: Optional[int] = None
+    downscale: float = 1.0
+    stride: int = 1
+    fps: float = 10.0
+    calibration: Literal["auto", "manual"] = "auto"
+    fx: Optional[float] = None
+    fy: Optional[float] = None
+    cx: Optional[float] = None
+    cy: Optional[float] = None
+    keyframe_policy: Literal["score_gated", "translation", "hybrid"] = "score_gated"
+
+    # Shared preproc flags (a subset of lingbot's; Phase 3 introduces a richer
+    # PreprocConfig shared across all modes).
+    preproc_fisheye: bool = False
+    fisheye_in_fov: float = 165.0
+    fisheye_out_fov: float = 90.0
+    preproc_denoise: bool = False
+    preproc_osd_mask: bool = False
+
+    vram_soft_limit_gb: Optional[float] = None
+    partial_snapshot_every: int = 60
+
+
+class GsplatConfig(BaseModel):
+    """Stub for the GS training mode. Consumes a completed SLAM (or lingbot)
+    job's output. Implemented in Phase 5."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    processor: Literal["gsplat"] = "gsplat"
+    source_job_id: str
+    iterations: int = 30_000
+    sh_degree: int = 3
+    densify_interval: int = 500
+    prune_opacity: float = 0.005
+    init_from: Literal["point_cloud", "random"] = "point_cloud"
+    preview_every_iters: int = 1000
+    vram_soft_limit_gb: Optional[float] = None
+
+
+# Discriminated union. Pydantic v2 picks the right class based on the
+# "processor" field. SlamConfig covers four literal values of the discriminator
+# which Pydantic folds into the union correctly.
+AnyJobConfig = Annotated[
+    Union[LingbotConfig, SlamConfig, GsplatConfig],
+    Field(discriminator="processor"),
+]
+
+# Back-compat alias so modules that only know the lingbot shape keep working.
+# New code should reference AnyJobConfig (at boundaries) or the specific
+# LingbotConfig/SlamConfig/GsplatConfig (inside a processor).
+JobConfig = LingbotConfig
+
+_ANY_JOB_CONFIG_ADAPTER: TypeAdapter[AnyJobConfig] = TypeAdapter(AnyJobConfig)
+
+
+def parse_job_config(raw: Union[str, bytes, dict[str, Any]]) -> AnyJobConfig:
+    """Parse a raw job config payload into the discriminated union.
+
+    Rows created before this refactor have no `processor` field — treat them
+    as lingbot so existing jobs keep loading cleanly.
+    """
+    if isinstance(raw, (str, bytes)):
+        data = json.loads(raw)
+    else:
+        data = dict(raw)
+    if "processor" not in data:
+        data["processor"] = "lingbot"
+    return _ANY_JOB_CONFIG_ADAPTER.validate_python(data)
+
+
+def dump_job_config(cfg: AnyJobConfig) -> str:
+    """JSON-encode a config regardless of which branch of the union it is."""
+    return _ANY_JOB_CONFIG_ADAPTER.dump_json(cfg).decode()
+
+
+def processor_kind(cfg: AnyJobConfig) -> ProcessorKind:
+    """Group the specific processor id into its broader kind for UI wiring."""
+    pid = cfg.processor
+    if pid == "lingbot":
+        return "reconstruction"
+    if pid == "gsplat":
+        return "gsplat"
+    return "slam"
+
+
 class Artifact(BaseModel):
     name: str
-    kind: Literal["glb", "ply", "obj", "npz", "json"]
+    kind: ArtifactKind
     revision: int = 0
     size_bytes: int = 0
     created_at: datetime = Field(default_factory=_now)
@@ -107,7 +250,7 @@ class JobEvent(BaseModel):
 class Job(BaseModel):
     id: str
     status: JobStatus = "queued"
-    config: JobConfig
+    config: AnyJobConfig
     uploads: list[str] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     frames_total: Optional[int] = None
@@ -123,6 +266,7 @@ class JobSummary(BaseModel):
     updated_at: datetime
     frames_total: Optional[int] = None
     artifact_count: int = 0
+    processor: ProcessorId = "lingbot"
 
 
 class MeshEditRequest(BaseModel):

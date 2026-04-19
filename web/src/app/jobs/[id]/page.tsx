@@ -16,6 +16,7 @@ import { useJobManifest } from "@/hooks/useJob";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { useJobStream } from "@/hooks/useJobStream";
 import { artifactUrl, restartJob, stopJob } from "@/lib/api";
+import { isLingbotConfig } from "@/lib/types";
 import { useViewerStore } from "@/lib/viewerStore";
 
 interface Props {
@@ -181,7 +182,7 @@ export default function JobPage({ params }: Props) {
       </header>
 
       <aside className="job-side">
-        {manifest && (
+        {manifest && isLingbotConfig(manifest.config) && (
           <ConfigPanel
             config={manifest.config}
             onChange={() => undefined}

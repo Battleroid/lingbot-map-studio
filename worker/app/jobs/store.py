@@ -10,7 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
-from app.jobs.schema import Artifact, Job, JobConfig, JobStatus, JobSummary
+from app.jobs.schema import (
+    Artifact,
+    Job,
+    JobStatus,
+    JobSummary,
+    dump_job_config,
+    parse_job_config,
+)
 
 
 class Base(DeclarativeBase):
@@ -63,7 +70,7 @@ def _row_to_job(row: JobRow) -> Job:
     return Job(
         id=row.id,
         status=row.status,  # type: ignore[arg-type]
-        config=JobConfig.model_validate_json(row.config_json),
+        config=parse_job_config(row.config_json),
         uploads=json.loads(row.uploads_json),
         artifacts=[Artifact.model_validate(a) for a in json.loads(row.artifacts_json)],
         frames_total=row.frames_total,
@@ -78,7 +85,7 @@ async def create_job(job: Job) -> None:
         row = JobRow(
             id=job.id,
             status=job.status,
-            config_json=job.config.model_dump_json(),
+            config_json=dump_job_config(job.config),
             uploads_json=json.dumps(job.uploads),
             artifacts_json=json.dumps([a.model_dump(mode="json") for a in job.artifacts]),
             frames_total=job.frames_total,
@@ -129,6 +136,9 @@ async def list_jobs() -> list[JobSummary]:
         out: list[JobSummary] = []
         for row in rows:
             artifacts = json.loads(row.artifacts_json)
+            # Pre-refactor rows have no `processor` field — treat as lingbot.
+            cfg_raw = json.loads(row.config_json)
+            processor_id = cfg_raw.get("processor", "lingbot")
             out.append(
                 JobSummary(
                     id=row.id,
@@ -137,6 +147,7 @@ async def list_jobs() -> list[JobSummary]:
                     updated_at=row.updated_at,
                     frames_total=row.frames_total,
                     artifact_count=len(artifacts),
+                    processor=processor_id,
                 )
             )
         return out

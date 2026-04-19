@@ -29,11 +29,13 @@ from app.jobs.events import bus
 from app.jobs.schema import (
     Artifact,
     Job,
-    JobConfig,
     JobEvent,
+    LingbotConfig,
     MeshEditRequest,
     ReexportRequest,
+    parse_job_config,
 )
+from app.processors import worker_class_for
 from app.mesh.ops import apply_op, mesh_summary
 from app.pipeline.export import reexport
 from app.pipeline.inference import load_cached_predictions
@@ -375,11 +377,16 @@ async def create_job(
     try:
         if not config:
             raise HTTPException(status_code=422, detail="config is required")
-        config_obj = JobConfig.model_validate_json(config)
+        config_obj = parse_job_config(config)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"invalid config: {exc}") from exc
+
+    # Worker-class routing is derived from the processor id. In Phase 1 the
+    # runner still executes in-process on whichever container we happen to
+    # be; Phase 2 introduces dedicated workers and uses this value to route.
+    _ = worker_class_for(config_obj)
 
     job_id = new_job_id()
     uploads_dir = settings.job_uploads(job_id)
@@ -600,6 +607,17 @@ async def reexport_job(job_id: str, body: ReexportRequest) -> dict[str, Any]:
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    # Reexport is lingbot-specific — it reloads cached model predictions and
+    # re-runs the lingbot GLB export with new thresholds. Other modes have
+    # their own reexport paths (added in later phases).
+    if not isinstance(job.config, LingbotConfig):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"reexport not supported for processor={job.config.processor!r}; "
+                "this endpoint only handles lingbot jobs"
+            ),
+        )
     try:
         predictions = load_cached_predictions(job_id, settings.data_dir)
     except FileNotFoundError as exc:

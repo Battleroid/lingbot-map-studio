@@ -3,6 +3,9 @@ export type JobStatus =
   | "ingest"
   | "inference"
   | "export"
+  | "slam"
+  | "meshing"
+  | "training"
   | "ready"
   | "failed"
   | "cancelled";
@@ -20,6 +23,9 @@ export type EventStage =
   | "ingest"
   | "checkpoint"
   | "inference"
+  | "slam"
+  | "training"
+  | "meshing"
   | "export"
   | "mesh"
   | "artifact"
@@ -27,7 +33,21 @@ export type EventStage =
 
 export type InferenceMode = "streaming" | "windowed";
 
-export interface JobConfig {
+export type ProcessorId =
+  | "lingbot"
+  | "droid_slam"
+  | "mast3r_slam"
+  | "dpvo"
+  | "monogs"
+  | "gsplat";
+
+export type SlamBackend = "droid_slam" | "mast3r_slam" | "dpvo" | "monogs";
+
+export type ProcessorKind = "reconstruction" | "slam" | "gsplat";
+
+export interface LingbotConfig {
+  processor: "lingbot";
+
   model_id: string;
   mode: InferenceMode;
   window_size: number;
@@ -65,7 +85,51 @@ export interface JobConfig {
 
   // Guardrails
   vram_soft_limit_gb: number | null;
+  partial_snapshot_every?: number;
 }
+
+// SLAM config stub — Phase 4 extends with per-backend tunables.
+export interface SlamConfig {
+  processor: SlamBackend;
+  max_frames: number | null;
+  downscale: number;
+  stride: number;
+  fps: number;
+  calibration: "auto" | "manual";
+  fx: number | null;
+  fy: number | null;
+  cx: number | null;
+  cy: number | null;
+  keyframe_policy: "score_gated" | "translation" | "hybrid";
+
+  preproc_fisheye: boolean;
+  fisheye_in_fov: number;
+  fisheye_out_fov: number;
+  preproc_denoise: boolean;
+  preproc_osd_mask: boolean;
+
+  vram_soft_limit_gb: number | null;
+  partial_snapshot_every: number;
+}
+
+// Gaussian-splat training config stub — Phase 5 extends.
+export interface GsplatConfig {
+  processor: "gsplat";
+  source_job_id: string;
+  iterations: number;
+  sh_degree: number;
+  densify_interval: number;
+  prune_opacity: number;
+  init_from: "point_cloud" | "random";
+  preview_every_iters: number;
+  vram_soft_limit_gb: number | null;
+}
+
+export type AnyJobConfig = LingbotConfig | SlamConfig | GsplatConfig;
+
+// Back-compat alias: most existing UI code only knows the lingbot shape.
+// Phase 6 migrates those call sites to be mode-aware.
+export type JobConfig = LingbotConfig;
 
 export interface JobSummary {
   id: string;
@@ -74,11 +138,25 @@ export interface JobSummary {
   updated_at: string;
   frames_total: number | null;
   artifact_count: number;
+  processor: ProcessorId;
 }
+
+// Known artifact kinds. `suffix`-based routing in the viewer uses this
+// enum to decide which layer/tool to mount for each artifact.
+export type ArtifactKind =
+  | "glb"
+  | "ply"
+  | "obj"
+  | "npz"
+  | "json"
+  | "splat_ply"
+  | "splat_sogs"
+  | "pose_graph_json"
+  | "keyframes_jsonl";
 
 export interface Artifact {
   name: string;
-  kind: "glb" | "ply" | "obj" | "npz" | "json";
+  kind: ArtifactKind;
   revision: number;
   size_bytes: number;
   created_at: string;
@@ -87,7 +165,7 @@ export interface Artifact {
 export interface Job {
   id: string;
   status: JobStatus;
-  config: JobConfig;
+  config: AnyJobConfig;
   uploads: string[];
   artifacts: Artifact[];
   frames_total: number | null;
@@ -105,7 +183,7 @@ export interface ManifestArtifact {
 export interface JobManifest {
   id: string;
   status: JobStatus;
-  config: JobConfig;
+  config: AnyJobConfig;
   artifacts: ManifestArtifact[];
   latest_mesh: string | null;
   frames_total: number | null;
@@ -147,7 +225,31 @@ export interface ReexportRequest {
   mask_white_bg?: boolean;
 }
 
-export const DEFAULT_CONFIG: JobConfig = {
+export function isLingbotConfig(c: AnyJobConfig): c is LingbotConfig {
+  return c.processor === "lingbot";
+}
+
+export function isSlamConfig(c: AnyJobConfig): c is SlamConfig {
+  return (
+    c.processor === "droid_slam" ||
+    c.processor === "mast3r_slam" ||
+    c.processor === "dpvo" ||
+    c.processor === "monogs"
+  );
+}
+
+export function isGsplatConfig(c: AnyJobConfig): c is GsplatConfig {
+  return c.processor === "gsplat";
+}
+
+export function processorKind(c: AnyJobConfig): ProcessorKind {
+  if (isLingbotConfig(c)) return "reconstruction";
+  if (isGsplatConfig(c)) return "gsplat";
+  return "slam";
+}
+
+export const DEFAULT_CONFIG: LingbotConfig = {
+  processor: "lingbot",
   model_id: "lingbot-map",
   mode: "streaming",
   window_size: 64,
@@ -183,7 +285,7 @@ export const DEFAULT_CONFIG: JobConfig = {
   vram_soft_limit_gb: null,
 };
 
-export const PRESETS: Record<string, Partial<JobConfig>> = {
+export const PRESETS: Record<string, Partial<LingbotConfig>> = {
   "low-mem": {
     // Aggressive VRAM reduction — for longer clips or smaller cards.
     // NOTE: image_size stays at 518 because the pretrained checkpoint's
