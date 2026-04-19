@@ -20,8 +20,8 @@ import asyncio
 import logging
 import os
 import signal
-from pathlib import Path
 
+from app.cloud import JobSource, LocalJobSource
 from app.config import settings
 from app.jobs import runner, store
 from app.processors import ids_for_worker_class, load_processor
@@ -63,11 +63,21 @@ def _apply_vram_cap() -> None:
         log.warning("failed to apply vram cap: %s", exc)
 
 
-def _uploads_dir_for(job_id: str) -> list[Path]:
-    uploads_dir = settings.job_uploads(job_id)
-    if not uploads_dir.exists():
-        return []
-    return sorted(uploads_dir.iterdir())
+def _build_job_source() -> JobSource:
+    """Pick a transport from env. Default is the shared-volume local source.
+
+    `WORKER_MODE=remote` swaps in the HTTP source (arrives in the next
+    slice — for now, unrecognised values fail fast so misconfigured pods
+    don't silently process nothing).
+    """
+    mode = os.environ.get("WORKER_MODE", "local").lower()
+    if mode == "local":
+        return LocalJobSource()
+    if mode == "remote":
+        raise RuntimeError(
+            "WORKER_MODE=remote requires HttpJobSource, not yet landed"
+        )
+    raise RuntimeError(f"unknown WORKER_MODE={mode!r}")
 
 
 async def _preload_processors(worker_class: str) -> None:
@@ -103,7 +113,13 @@ async def _sweep_loop(stop: asyncio.Event) -> None:
 
 async def _run_forever(worker_class: str) -> None:
     worker_id = store.worker_identity()
-    log.info("worker %s starting as class=%s", worker_id, worker_class)
+    source = _build_job_source()
+    log.info(
+        "worker %s starting as class=%s (source=%s)",
+        worker_id,
+        worker_class,
+        type(source).__name__,
+    )
 
     await store.init_store()
     await _preload_processors(worker_class)
@@ -128,9 +144,9 @@ async def _run_forever(worker_class: str) -> None:
     try:
         while not stop.is_set():
             try:
-                claim = await store.claim_next_job(worker_class, worker_id=worker_id)
+                claim = await source.claim_next(worker_class, worker_id=worker_id)
             except Exception as exc:  # noqa: BLE001
-                log.warning("claim_next_job failed: %s", exc)
+                log.warning("claim_next failed: %s", exc)
                 await asyncio.sleep(IDLE_POLL_INTERVAL_S)
                 continue
 
@@ -141,15 +157,24 @@ async def _run_forever(worker_class: str) -> None:
                     pass
                 continue
 
-            job_id, config, _upload_names = claim
-            uploads = _uploads_dir_for(job_id)
-            log.info("claimed %s (processor=%s, %d upload(s))", job_id, config.processor, len(uploads))
+            log.info(
+                "claimed %s (processor=%s, %d upload(s))",
+                claim.job_id,
+                claim.config.processor,
+                len(claim.uploads),
+            )
             try:
-                await runner.run_job(job_id, uploads, config, worker_id=worker_id)
+                await runner.run_job(
+                    claim.job_id,
+                    claim.uploads,
+                    claim.config,
+                    worker_id=worker_id,
+                    source=source,
+                )
             except Exception:
-                # runner.run_job already updates the row to failed on
-                # exception — we just log and continue to the next job.
-                log.exception("unhandled error running %s", job_id)
+                # runner.run_job already finalises the row on exception — we
+                # just log and continue to the next job.
+                log.exception("unhandled error running %s", claim.job_id)
     finally:
         sweeper.cancel()
         try:

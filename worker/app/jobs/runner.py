@@ -5,11 +5,10 @@ import logging
 import traceback
 from pathlib import Path
 
-from app.config import settings
+from app.cloud import JobSource, LocalJobSource
 from app.jobs import cancel as cancel_mod
 from app.jobs import store
 from app.jobs.cancel import CancelToken, JobCancelled
-from app.jobs.events import bus
 from app.jobs.schema import AnyJobConfig, JobEvent, JobStatus
 from app.pipeline.watchdog import VramLimitExceeded
 from app.processors import resolve
@@ -22,12 +21,18 @@ log = logging.getLogger(__name__)
 # claim sweep uses ~3× this to decide a worker has vanished.
 HEARTBEAT_INTERVAL_S = 10.0
 
+# How often the runner polls the cancel flag through the job source. Lower
+# than `HEARTBEAT_INTERVAL_S` so cancel feels snappy even over HTTP.
+CANCEL_POLL_INTERVAL_S = 0.5
 
-async def _heartbeat_loop(job_id: str, worker_id: str, interval_s: float) -> None:
+
+async def _heartbeat_loop(
+    source: JobSource, job_id: str, worker_id: str, interval_s: float
+) -> None:
     try:
         while True:
             try:
-                await store.heartbeat(job_id, worker_id=worker_id)
+                await source.heartbeat(job_id, worker_id)
             except Exception as exc:  # noqa: BLE001
                 log.warning("heartbeat failed for %s: %s", job_id, exc)
             await asyncio.sleep(interval_s)
@@ -35,8 +40,28 @@ async def _heartbeat_loop(job_id: str, worker_id: str, interval_s: float) -> Non
         return
 
 
-async def _publish(event: JobEvent) -> JobEvent:
-    return await bus.publish(event)
+async def _cancel_watch_loop(
+    source: JobSource,
+    job_id: str,
+    token: CancelToken,
+    poll_interval_s: float,
+) -> None:
+    """Mirror the studio's cancel flag onto `token.cancelled`.
+
+    Replaces `cancel_mod.watch_cancel_flag` for the source-aware runner so
+    the same poll works for both local sqlite reads and HTTP long-polls.
+    """
+    try:
+        while not token.cancelled:
+            try:
+                if await source.is_cancel_requested(job_id):
+                    token.cancel("stopped by user")
+                    return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cancel-poller read failed for %s: %s", job_id, exc)
+            await asyncio.sleep(poll_interval_s)
+    except asyncio.CancelledError:
+        return
 
 
 async def run_job(
@@ -45,37 +70,45 @@ async def run_job(
     config: AnyJobConfig,
     *,
     worker_id: str | None = None,
+    source: JobSource | None = None,
 ) -> None:
     """Run a single job to completion by dispatching to the processor matching
     `config.processor`.
 
-    The runner owns DB state transitions, cancellation bookkeeping, and the
+    The runner owns state transitions, cancellation bookkeeping, and the
     error-handling fan-out (OOM / cancelled / watchdog / general failure).
     Processors are pure: they publish events, do work, and return the
-    artifacts they produced.
+    artifacts they produced. All "talk to the studio" calls go through the
+    `JobSource` so the same runner executes both locally (LocalJobSource) and
+    against a remote broker (HttpJobSource, later slice).
     """
 
-    job_dir = settings.job_dir(job_id)
-    frames_dir = settings.job_frames(job_id)
-    artifacts_dir = settings.job_artifacts(job_id)
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    if source is None:
+        source = LocalJobSource()
+
+    job_dir = source.job_dir(job_id)
+    frames_dir = source.frames_dir(job_id)
+    artifacts_dir = source.artifacts_dir(job_id)
 
     if worker_id is None:
         worker_id = store.worker_identity()
 
     # Fresh in-memory token for this run. The in-process `_tokens` dict is
     # still populated so code paths that have an existing handle (e.g. older
-    # tests) keep working, but the authoritative signal is the DB column
-    # polled by `watch_cancel_flag`.
+    # tests) keep working, but the authoritative signal is the studio's
+    # cancel flag polled via the source.
     cancel_token = cancel_mod.get_token(job_id)
     cancel_token.cancelled = False
     cancel_token.reason = ""
 
+    async def _publish(event: JobEvent) -> JobEvent:
+        return await source.publish_event(event)
+
     async def _set_status(status: JobStatus) -> None:
-        await store.update_job(job_id, status=status)
+        await source.set_status(job_id, status)
 
     async def _set_frames_total(frames_total: int) -> None:
-        await store.update_job(job_id, frames_total=frames_total)
+        await source.set_frames_total(job_id, frames_total)
 
     ctx = JobContext(
         job_id=job_id,
@@ -90,20 +123,21 @@ async def run_job(
         set_frames_total=_set_frames_total,
     )
 
-    # Background helpers: mirror the DB cancel flag onto the token and keep
-    # the claim fresh so the stale-sweep doesn't reap us mid-run.
+    # Background helpers: mirror the studio's cancel flag onto the token and
+    # keep the claim fresh so the stale-sweep doesn't reap us mid-run.
     cancel_watcher = asyncio.create_task(
-        cancel_mod.watch_cancel_flag(job_id, cancel_token)
+        _cancel_watch_loop(source, job_id, cancel_token, CANCEL_POLL_INTERVAL_S)
     )
     heartbeat_task = asyncio.create_task(
-        _heartbeat_loop(job_id, worker_id, HEARTBEAT_INTERVAL_S)
+        _heartbeat_loop(source, job_id, worker_id, HEARTBEAT_INTERVAL_S)
     )
 
     try:
         processor = resolve(config)
         result = await processor.run(ctx)
 
-        await store.update_job(job_id, status="ready", artifacts=result.artifacts)
+        await source.set_artifacts(job_id, result.artifacts)
+        await source.set_status(job_id, "ready")
         await _publish(
             JobEvent(
                 job_id=job_id,
@@ -117,11 +151,8 @@ async def run_job(
         )
     except JobCancelled as exc:
         log.info("job %s cancelled: %s", job_id, exc)
-        await store.update_job(
-            job_id,
-            status="cancelled",
-            error=f"cancelled: {exc}",
-        )
+        await source.set_error(job_id, f"cancelled: {exc}")
+        await source.set_status(job_id, "cancelled")
         await _publish(
             JobEvent(
                 job_id=job_id,
@@ -132,10 +163,9 @@ async def run_job(
         )
     except VramLimitExceeded as exc:
         log.warning("job %s aborted by vram watchdog: %s", job_id, exc)
-        await store.update_job(
+        await source.set_error(
             job_id,
-            status="failed",
-            error=(
+            (
                 f"vram watchdog aborted the job: {exc}\n\n"
                 "try one of these:\n"
                 "  · apply the 'low-mem' preset\n"
@@ -145,6 +175,7 @@ async def run_job(
                 "  · lower image_size to 384"
             ),
         )
+        await source.set_status(job_id, "failed")
         await _publish(
             JobEvent(
                 job_id=job_id,
@@ -162,10 +193,9 @@ async def run_job(
         )
         if is_cuda_oom:
             log.warning("job %s failed with CUDA OOM", job_id)
-            await store.update_job(
+            await source.set_error(
                 job_id,
-                status="failed",
-                error=(
+                (
                     "CUDA out of memory during inference.\n\n"
                     "the sequence is too long for streaming mode at current "
                     "settings. try in this order:\n"
@@ -176,6 +206,7 @@ async def run_job(
                     f"raw error: {exc}"
                 ),
             )
+            await source.set_status(job_id, "failed")
             await _publish(
                 JobEvent(
                     job_id=job_id,
@@ -187,11 +218,8 @@ async def run_job(
         else:
             log.exception("job %s failed", job_id)
             tb = traceback.format_exc()
-            await store.update_job(
-                job_id,
-                status="failed",
-                error=f"{type(exc).__name__}: {exc}\n\n{tb}",
-            )
+            await source.set_error(job_id, f"{type(exc).__name__}: {exc}\n\n{tb}")
+            await source.set_status(job_id, "failed")
             await _publish(
                 JobEvent(
                     job_id=job_id,
@@ -214,10 +242,10 @@ async def run_job(
 
         cancel_mod.drop_token(job_id)
         try:
-            await store.release_job(job_id, worker_id=worker_id)
+            await source.release(job_id, worker_id)
         except Exception as exc:  # noqa: BLE001
             log.warning("failed to release claim for %s: %s", job_id, exc)
-        await bus.close(job_id)
+        await source.close_events(job_id)
 
 
 def pick_cancel_token(job_id: str) -> CancelToken:
