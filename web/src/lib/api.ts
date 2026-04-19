@@ -1,4 +1,5 @@
 import type {
+  AnyJobConfig,
   Job,
   JobConfig,
   JobManifest,
@@ -98,7 +99,7 @@ export function deleteDraft(id: string): Promise<{ deleted: true }> {
 
 export async function startJobFromDraft(
   draftId: string,
-  config: JobConfig,
+  config: AnyJobConfig,
 ): Promise<{ id: string }> {
   const fd = new FormData();
   fd.append("draft_id", draftId);

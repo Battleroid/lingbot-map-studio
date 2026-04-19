@@ -5,9 +5,11 @@ import { use, useEffect, useMemo, useState } from "react";
 
 import { ConfigPanel } from "@/components/ConfigPanel";
 import { ExportMenu } from "@/components/ExportMenu";
+import { GsplatConfigPanel } from "@/components/GsplatConfigPanel";
 import { JobStatusStrip } from "@/components/JobStatusStrip";
 import { LogStream } from "@/components/LogStream";
-import { MeshTools } from "@/components/MeshTools";
+import { SlamConfigPanel } from "@/components/SlamConfigPanel";
+import { ToolsPanel } from "@/components/ToolsPanel";
 import { ViewerCanvas } from "@/components/Viewer/Canvas";
 import { ViewerControls } from "@/components/Viewer/ViewerControls";
 import { ViewerErrorBoundary } from "@/components/Viewer/ViewerErrorBoundary";
@@ -16,7 +18,11 @@ import { useJobManifest } from "@/hooks/useJob";
 import { useJobStatus } from "@/hooks/useJobStatus";
 import { useJobStream } from "@/hooks/useJobStream";
 import { artifactUrl, restartJob, stopJob } from "@/lib/api";
-import { isLingbotConfig } from "@/lib/types";
+import {
+  isGsplatConfig,
+  isLingbotConfig,
+  isSlamConfig,
+} from "@/lib/types";
 import { useViewerStore } from "@/lib/viewerStore";
 
 interface Props {
@@ -111,6 +117,23 @@ export default function JobPage({ params }: Props) {
     return latest;
   }, [events]);
 
+  // Same mechanism for partial splat checkpoints (gsplat training + MonoGS
+  // live splat). A partial_splat_cleanup event clears the reference.
+  const latestPartialSplat = useMemo(() => {
+    let latest: string | null = null;
+    for (const ev of events) {
+      if (ev.stage !== "artifact") continue;
+      const kind = ev.data?.["kind"];
+      if (kind === "partial_splat" || kind === "splat_ply") {
+        const name = ev.data?.["name"];
+        if (typeof name === "string") latest = name;
+      } else if (kind === "partial_splat_cleanup") {
+        latest = null;
+      }
+    }
+    return latest;
+  }, [events]);
+
   const finalPlyName = useMemo(() => {
     if (!manifest) return null;
     const ply = manifest.artifacts.find(
@@ -119,12 +142,25 @@ export default function JobPage({ params }: Props) {
     return ply?.name || null;
   }, [manifest]);
 
+  // Final splat.ply (or the MonoGS splat) if the job produced one.
+  const finalSplatName = useMemo(() => {
+    if (!manifest) return null;
+    const splat = manifest.artifacts.find(
+      (a) =>
+        a.suffix === "ply" &&
+        (a.name === "splat.ply" || a.name.startsWith("splat_")),
+    );
+    return splat?.name || null;
+  }, [manifest]);
+
   // Prefer the final PLY once the job is ready; otherwise show the latest
   // partial snapshot during inference.
   const plyName = finalPlyName || latestPartialPly || null;
+  const splatName = finalSplatName || latestPartialSplat || null;
 
   const glbUrl = activeMeshName ? artifactUrl(id, activeMeshName) : null;
   const plyUrl = plyName ? artifactUrl(id, plyName) : null;
+  const splatUrl = splatName ? artifactUrl(id, splatName) : null;
 
   // Camera path is only produced on successful export — only fetch when the
   // manifest actually lists it (avoids spurious 404s during inference).
@@ -190,6 +226,21 @@ export default function JobPage({ params }: Props) {
             compact
           />
         )}
+        {manifest && isSlamConfig(manifest.config) && (
+          <SlamConfigPanel
+            config={manifest.config}
+            onChange={() => undefined}
+            readOnly
+            compact
+          />
+        )}
+        {manifest && isGsplatConfig(manifest.config) && (
+          <GsplatConfigPanel
+            config={manifest.config}
+            onChange={() => undefined}
+            readOnly
+          />
+        )}
         <ExportMenu
           jobId={id}
           artifacts={manifest?.artifacts ?? []}
@@ -198,7 +249,11 @@ export default function JobPage({ params }: Props) {
             setMeshOverride(name.endsWith(".glb") ? name : activeMeshName)
           }
         />
-        <MeshTools jobId={id} onRevision={setMeshOverride} />
+        <ToolsPanel
+          jobId={id}
+          config={manifest?.config ?? null}
+          onRevision={setMeshOverride}
+        />
         {manifest?.error && (
           <div className="panel">
             <div className="panel-header">
@@ -226,10 +281,11 @@ export default function JobPage({ params }: Props) {
         />
         <ViewerControls pathPoseCount={cameraPath?.poses.length ?? 0} />
         <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
-          <ViewerErrorBoundary resetKey={`${glbUrl}|${plyUrl}`}>
+          <ViewerErrorBoundary resetKey={`${glbUrl}|${plyUrl}|${splatUrl}`}>
             <ViewerCanvas
               glbUrl={glbUrl}
               plyUrl={plyUrl}
+              splatUrl={splatUrl}
               cameraPath={cameraPath}
             />
           </ViewerErrorBoundary>
