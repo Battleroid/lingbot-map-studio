@@ -26,6 +26,24 @@ class Settings(BaseSettings):
     # torch.cuda.OutOfMemoryError.
     vram_default_soft_limit_gb: float = 19.0
 
+    # --- Cloud execution (Phase R1) ---
+    # How a remote worker reaches this API. Used when dispatching a job to a
+    # rented pod; the pod's env gets this as STUDIO_BROKER_URL.
+    cloud_broker_public_url: str = "http://localhost:8000"
+    # Shared secret that signs the per-job HMAC tokens issued to remote
+    # workers. Rotate by changing this and letting in-flight jobs finish
+    # under the old key (tokens carry their expiry; the signer key is
+    # checked on every request).
+    cloud_broker_hmac_key: str = "change-me-in-production"
+    # Lifetime of a per-job broker token. Long enough for a cold-start +
+    # ingest + inference + export on a slow provider; short enough that a
+    # leaked token times out before it's useful.
+    cloud_broker_token_ttl_s: int = 6 * 60 * 60
+    # Studio-wide hard upper bound on per-job cloud spend. Dispatcher
+    # refuses to launch if the estimate exceeds this regardless of the
+    # job-level cap. Defaults to $50.
+    cloud_cost_cap_cents_default: int = 5000
+
     model_config = SettingsConfigDict(env_file=None, case_sensitive=False)
 
     def ensure_dirs(self) -> None:

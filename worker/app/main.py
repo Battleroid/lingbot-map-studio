@@ -20,6 +20,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.cloud.broker import router as broker_router
 from app.config import settings
 from app.jobs import cancel as cancel_mod
 from app.jobs import drafts, store
@@ -120,6 +121,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Broker surface for remote workers. Gated by per-request HMAC tokens;
+# mounting it here gives remote pods the same origin as the studio API
+# so they only open a single outbound HTTPS connection.
+app.include_router(broker_router)
 
 _MIME = {
     ".glb": "model/gltf-binary",
