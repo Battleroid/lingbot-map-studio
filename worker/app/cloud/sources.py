@@ -104,6 +104,24 @@ class JobSource(abc.ABC):
     @abc.abstractmethod
     async def is_cancel_requested(self, job_id: str) -> bool: ...
 
+    # --- artifact sync (remote sources only) -----------------------------
+
+    async def sync_artifacts(self, job_id: str) -> None:
+        """Upload any new/changed files in `artifacts_dir` to the studio.
+
+        No-op for `LocalJobSource` because the shared volume already
+        *is* the studio's artifacts dir. `HttpJobSource` overrides to
+        scan its pod-local dir and PUT files the studio hasn't seen
+        yet — this is how `partial_NNN.ply` live-preview snapshots
+        reach the frontend from a rented pod.
+
+        The runner spawns a periodic caller of this method next to
+        the heartbeat loop, and does a final flush in its `finally`.
+        Cheap to call repeatedly: the implementation is expected to
+        skip unchanged files (same mtime + size as last push).
+        """
+        return
+
     # --- filesystem handoff ----------------------------------------------
 
     @abc.abstractmethod

@@ -94,6 +94,12 @@ class HttpJobSource(JobSource):
         # Track the job's scratch dir for on-demand cleanup. Populated by
         # `claim_next`; consulted by `release`.
         self._job_scratch: dict[str, Path] = {}
+        # Per-job sync bookkeeping: for each file path we've pushed, the
+        # (size, mtime_ns) snapshot of the version the studio currently
+        # has. Skipping files that haven't moved since keeps the sync
+        # loop cheap during a long gsplat training run (one `os.stat`
+        # per file per tick, no network traffic).
+        self._artifact_sync_state: dict[str, dict[Path, tuple[int, int]]] = {}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -247,6 +253,58 @@ class HttpJobSource(JobSource):
         resp = await self._client.get("/api/worker/cancel")
         resp.raise_for_status()
         return bool(resp.json().get("cancel_requested", False))
+
+    # --- artifact sync (live partial-snapshot streaming) ---------------
+
+    async def sync_artifacts(self, job_id: str) -> None:
+        """Scan the pod's artifacts dir and PUT any new/changed files.
+
+        Called on a short interval by the runner's sync loop. Intended
+        to make `partial_NNN.ply` / `partial_splat_NNN.ply` snapshots
+        show up in the studio's artifacts dir moments after the
+        processor writes them, matching local-worker live-preview UX.
+
+        Stability guard: a file whose size changed between the last
+        tick and this one is assumed to be mid-write; we skip and try
+        again next tick. Without this, a processor writing an artifact
+        in append-mode would see half-written bytes land on the
+        studio disk until the next PUT replaces them.
+        """
+        scratch_art_dir = self._scratch_dir_for(job_id) / "artifacts"
+        if not scratch_art_dir.is_dir():
+            return
+
+        state = self._artifact_sync_state.setdefault(job_id, {})
+        for path in sorted(scratch_art_dir.iterdir()):
+            if not path.is_file():
+                continue
+            # Skip `.part` sidecars — those are in-progress writes the
+            # broker's own PUT handler already owns.
+            if path.name.endswith(".part"):
+                continue
+            try:
+                st = path.stat()
+            except FileNotFoundError:
+                # Raced with a rename; pick it up next tick.
+                continue
+            current = (st.st_size, st.st_mtime_ns)
+            previous = state.get(path)
+            if previous == current:
+                continue
+            # Stability: if the size changed since last observation and
+            # the previous state was a different snapshot (not the
+            # first sighting), push anyway — mtime+size together are
+            # the stability signal, not size alone. We only hold back
+            # a file on its first sighting with zero bytes, which
+            # means the writer opened it but hasn't written yet.
+            if previous is None and st.st_size == 0:
+                continue
+            try:
+                await self._upload_file(f"/api/worker/artifacts/{path.name}", path)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("artifact sync failed for %s: %s", path.name, exc)
+                continue
+            state[path] = current
 
     # --- filesystem handoff --------------------------------------------
 

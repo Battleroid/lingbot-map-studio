@@ -25,6 +25,13 @@ HEARTBEAT_INTERVAL_S = 10.0
 # than `HEARTBEAT_INTERVAL_S` so cancel feels snappy even over HTTP.
 CANCEL_POLL_INTERVAL_S = 0.5
 
+# How often the runner asks the source to push any new/changed artifact
+# files to the studio. Only does work for `HttpJobSource`; local source
+# skips as a no-op since the shared volume is the same thing. 1s keeps
+# live-preview `partial_NNN.ply` snapshots feeling immediate without
+# hammering the broker during an inference-bound stretch.
+ARTIFACT_SYNC_INTERVAL_S = 1.0
+
 
 async def _heartbeat_loop(
     source: JobSource, job_id: str, worker_id: str, interval_s: float
@@ -35,6 +42,28 @@ async def _heartbeat_loop(
                 await source.heartbeat(job_id, worker_id)
             except Exception as exc:  # noqa: BLE001
                 log.warning("heartbeat failed for %s: %s", job_id, exc)
+            await asyncio.sleep(interval_s)
+    except asyncio.CancelledError:
+        return
+
+
+async def _artifact_sync_loop(
+    source: JobSource, job_id: str, interval_s: float
+) -> None:
+    """Pump `source.sync_artifacts` on a short interval.
+
+    For remote sources, this is what makes live partial-snapshot
+    preview work: the processor writes `partial_007.ply` into
+    `ctx.artifacts_dir` and within ~1s it shows up on the studio
+    disk. For the local source, `sync_artifacts` is a no-op, so this
+    loop is cheap to leave on unconditionally.
+    """
+    try:
+        while True:
+            try:
+                await source.sync_artifacts(job_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("artifact sync failed for %s: %s", job_id, exc)
             await asyncio.sleep(interval_s)
     except asyncio.CancelledError:
         return
@@ -123,13 +152,18 @@ async def run_job(
         set_frames_total=_set_frames_total,
     )
 
-    # Background helpers: mirror the studio's cancel flag onto the token and
-    # keep the claim fresh so the stale-sweep doesn't reap us mid-run.
+    # Background helpers: mirror the studio's cancel flag onto the token,
+    # keep the claim fresh so the stale-sweep doesn't reap us mid-run, and
+    # (for remote sources) sync partial artifact snapshots up as they're
+    # written so the live-preview UX matches a local worker's.
     cancel_watcher = asyncio.create_task(
         _cancel_watch_loop(source, job_id, cancel_token, CANCEL_POLL_INTERVAL_S)
     )
     heartbeat_task = asyncio.create_task(
         _heartbeat_loop(source, job_id, worker_id, HEARTBEAT_INTERVAL_S)
+    )
+    artifact_sync_task = asyncio.create_task(
+        _artifact_sync_loop(source, job_id, ARTIFACT_SYNC_INTERVAL_S)
     )
 
     try:
@@ -231,7 +265,21 @@ async def run_job(
             )
     finally:
         # Stop background helpers before releasing the claim so a trailing
-        # heartbeat doesn't resurrect the claimed_at timestamp.
+        # heartbeat doesn't resurrect the claimed_at timestamp. The
+        # artifact syncer is stopped first + flushed once more so any
+        # final `partial_*` snapshot the processor wrote on its way out
+        # reaches the studio before we tear down.
+        if not artifact_sync_task.done():
+            artifact_sync_task.cancel()
+        try:
+            await asyncio.wait_for(artifact_sync_task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        try:
+            await source.sync_artifacts(job_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("final artifact sync failed for %s: %s", job_id, exc)
+
         for task in (cancel_watcher, heartbeat_task):
             if not task.done():
                 task.cancel()
