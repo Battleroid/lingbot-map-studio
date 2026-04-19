@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import shutil
 from contextlib import asynccontextmanager
@@ -9,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import (
-    Body,
     FastAPI,
     File,
     Form,
@@ -24,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
 from app.jobs import cancel as cancel_mod
-from app.jobs import drafts, runner, store
+from app.jobs import drafts, store
 from app.jobs.events import bus
 from app.jobs.schema import (
     Artifact,
@@ -52,53 +50,40 @@ log = logging.getLogger(__name__)
 
 
 async def _sweep_orphaned_jobs() -> None:
-    """Jobs that were running when the worker last stopped are orphaned.
+    """Reap jobs whose worker process died and never released the claim.
 
-    Their `asyncio.create_task` died with the process but their sqlite row
-    still claims `queued / ingest / inference / export`. On startup flip
-    them to `failed` so the UI shows a clear state and the user can
-    delete or restart.
+    Phase 2: the API no longer runs the inference itself, so 'orphaned'
+    means 'a worker crashed holding a claim'. `store.sweep_stale_claims`
+    checks `claimed_at` against the same threshold the worker uses for
+    its heartbeat, so jobs still actively running by a live worker are
+    left alone.
+
+    We call this once on API startup and then let the workers' background
+    sweep loop keep the DB clean afterwards.
     """
-    rows = await store.list_jobs()
-    running = {"queued", "ingest", "inference", "export"}
-    orphaned = 0
-    for r in rows:
-        if r.status in running:
-            await store.update_job(
-                r.id,
-                status="failed",
-                error=(
-                    "worker restarted while this job was running — "
-                    "marked as orphaned. delete or restart."
-                ),
-            )
-            orphaned += 1
-    if orphaned:
-        log.info("marked %d orphaned job(s) as failed on startup", orphaned)
+    reaped = await store.sweep_stale_claims(stale_after_s=60.0)
+    if reaped:
+        log.info("reaped %d orphaned job(s) on startup", reaped)
 
 
-def _apply_vram_cap() -> None:
-    """Cap this process's total CUDA memory to a fraction of device VRAM.
+async def _periodic_sweep_loop(stop: asyncio.Event) -> None:
+    """API-side copy of the stale-claim sweep.
 
-    Set before any real allocations happen. Prevents a runaway job from
-    paging GPU memory on WSL2, which can hang the Windows host.
+    The workers already run this, but the API container has a different
+    restart cadence and may notice a crashed worker first. Cheap — one
+    SELECT + ~0 updates per pass unless something actually crashed.
     """
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return
-        frac = max(0.1, min(1.0, settings.vram_limit_fraction))
-        torch.cuda.set_per_process_memory_fraction(frac, 0)
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        log.info(
-            "cuda memory cap: %.2f × %.1f GB = %.1f GB",
-            frac,
-            total,
-            frac * total,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("failed to apply vram cap: %s", exc)
+    while not stop.is_set():
+        try:
+            reaped = await store.sweep_stale_claims(stale_after_s=60.0)
+            if reaped:
+                log.info("api stale-claim sweep reaped %d job(s)", reaped)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("api stale-claim sweep failed: %s", exc)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            continue
 
 
 @asynccontextmanager
@@ -107,8 +92,21 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     await store.init_store()
     await _sweep_orphaned_jobs()
-    _apply_vram_cap()
-    yield
+
+    # The API no longer runs CUDA itself, so no vram cap here; each worker
+    # container applies its own in `worker_main.py`. Spawn the periodic
+    # sweep so crashed workers' jobs get reaped even when this API process
+    # is the first to notice.
+    sweep_stop = asyncio.Event()
+    sweep_task = asyncio.create_task(_periodic_sweep_loop(sweep_stop))
+    try:
+        yield
+    finally:
+        sweep_stop.set()
+        try:
+            await asyncio.wait_for(sweep_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
 
 
 app = FastAPI(title="lingbot-map studio worker", lifespan=lifespan)
@@ -383,10 +381,9 @@ async def create_job(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"invalid config: {exc}") from exc
 
-    # Worker-class routing is derived from the processor id. In Phase 1 the
-    # runner still executes in-process on whichever container we happen to
-    # be; Phase 2 introduces dedicated workers and uses this value to route.
-    _ = worker_class_for(config_obj)
+    # Worker-class routing is derived from the processor id. The API
+    # stamps it on the row; the matching worker container claims it.
+    worker_class = worker_class_for(config_obj)
 
     job_id = new_job_id()
     uploads_dir = settings.job_uploads(job_id)
@@ -421,8 +418,15 @@ async def create_job(
         raise HTTPException(status_code=422, detail="videos or draft_id required")
 
     job = Job(id=job_id, status="queued", config=config_obj, uploads=saved_names)
-    await store.create_job(job)
-    asyncio.create_task(runner.run_job(job_id, saved_paths, config_obj))
+    await store.create_job(job, worker_class=worker_class)
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="queue",
+            message=f"enqueued for worker-{worker_class}",
+            data={"worker_class": worker_class, "processor": config_obj.processor},
+        )
+    )
     return {"id": job_id}
 
 
@@ -430,31 +434,29 @@ async def create_job(
 async def delete_job(job_id: str, force: bool = False) -> dict[str, Any]:
     """Delete a job and all its artifacts.
 
-    A "running" status column is only authoritative while this worker process
-    actually has an asyncio task for the job — tracked via the cancel-token
-    registry. If the column says running but no token exists, the job is
-    orphaned (from a prior worker crash) and is safe to delete. Passing
-    `?force=true` bypasses even the token check.
+    Cross-container authoritative signal: the DB row's `claimed_by` column.
+    If a worker currently owns the claim we refuse unless `force=true`.
+    An unclaimed row in a running status (e.g. the worker died without
+    cleaning up) is safe to delete — we mark it failed first for the
+    audit log, then drop the files.
     """
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    running_statuses = {"queued", "ingest", "inference", "export"}
-    if job.status in running_statuses and not force:
-        # Is there actually a live task? If not, this is an orphan.
-        has_token = cancel_mod.get_token.__wrapped__ if False else None  # noqa
-        token = cancel_mod._tokens.get(job_id)  # type: ignore[attr-defined]
-        if token is not None:
+    if job.status in store.RUNNING_STATUSES and not force:
+        async with store.session() as s:
+            row = await s.get(store.JobRow, job_id)
+            claimed_by = row.claimed_by if row else None
+        if claimed_by:
             raise HTTPException(
                 status_code=409,
                 detail="job is running — stop it first or pass force=true",
             )
-        # Orphaned: mark failed, then delete.
         await store.update_job(
             job_id,
             status="failed",
-            error="deleted while orphaned (no active worker task)",
+            error="deleted while orphaned (no active worker claim)",
         )
 
     await store.delete_job(job_id)
@@ -485,7 +487,10 @@ async def stop_job(job_id: str, force: bool = False) -> dict[str, Any]:
     if job.status in {"ready", "failed", "cancelled"}:
         raise HTTPException(status_code=409, detail="job already finished")
 
-    cancel_mod.cancel(job_id, "stopped by user")
+    # Cross-process cancel: flip the DB flag. The worker's cancel-poller
+    # mirrors it onto the in-flight CancelToken on its next tick, and the
+    # pipeline hooks raise JobCancelled at the next checkpoint.
+    await cancel_mod.request_cancel(job_id, "stopped by user")
 
     if force:
         await store.update_job(
@@ -493,7 +498,6 @@ async def stop_job(job_id: str, force: bool = False) -> dict[str, Any]:
             status="cancelled",
             error="force-stopped by user (GPU task may still be running in the background — a worker restart will fully clean it up)",
         )
-        cancel_mod.drop_token(job_id)
         await bus.publish(
             JobEvent(
                 job_id=job_id,
@@ -555,8 +559,20 @@ async def restart_job(job_id: str) -> dict[str, str]:
         config=old.config,
         uploads=saved_names,
     )
-    await store.create_job(new_job_obj)
-    asyncio.create_task(runner.run_job(new_id, saved_paths, old.config))
+    worker_class = worker_class_for(old.config)
+    await store.create_job(new_job_obj, worker_class=worker_class)
+    await bus.publish(
+        JobEvent(
+            job_id=new_id,
+            stage="queue",
+            message=f"restarted from {job_id}; enqueued for worker-{worker_class}",
+            data={
+                "worker_class": worker_class,
+                "processor": old.config.processor,
+                "source_job_id": job_id,
+            },
+        )
+    )
     return {"id": new_id}
 
 

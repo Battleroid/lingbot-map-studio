@@ -1,6 +1,49 @@
 services:
-  worker:
-    build: ./worker
+  # Shared base image build step. All four app containers extend this so
+  # `app/`, the SQLAlchemy store, and the FastAPI surface are only built
+  # once. We declare it as a service with `profiles: [build]` so it never
+  # actually *runs* — `docker compose --profile build build base` produces
+  # the image, then api/worker services FROM it.
+  base:
+    image: lingbot-studio/base:latest
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.base
+    profiles: ["build"]
+
+  api:
+    image: lingbot-studio/api:latest
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.api
+      args:
+        BASE_IMAGE: lingbot-studio/base:latest
+    environment:
+      DATA_DIR: /data
+      MODELS_DIR: /models
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/data
+      - models:/models
+    ports:
+      - "8000:8000"
+    depends_on:
+      - base
+    ulimits:
+      memlock: -1
+      stack: 67108864
+      nofile:
+        soft: 65536
+        hard: 1048576
+
+  worker-lingbot:
+    image: lingbot-studio/worker-lingbot:latest
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.lingbot
+      args:
+        BASE_IMAGE: lingbot-studio/base:latest
+        USE_FLASHINFER: ${USE_FLASHINFER:-0}
     runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: all
@@ -10,11 +53,12 @@ services:
       MODELS_DIR: /models
       LOG_LEVEL: ${LOG_LEVEL:-info}
       USE_FLASHINFER: ${USE_FLASHINFER:-0}
+      WORKER_CLASS: lingbot
     volumes:
       - ./data:/data
       - models:/models
-    ports:
-      - "8000:8000"
+    depends_on:
+      - api
     deploy:
       resources:
         reservations:
@@ -33,6 +77,76 @@ services:
         soft: 65536
         hard: 1048576
 
+  worker-slam:
+    image: lingbot-studio/worker-slam:latest
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.slam
+      args:
+        BASE_IMAGE: lingbot-studio/base:latest
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      DATA_DIR: /data
+      MODELS_DIR: /models
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_CLASS: slam
+    volumes:
+      - ./data:/data
+      - models:/models
+    depends_on:
+      - api
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "8gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+      nofile:
+        soft: 65536
+        hard: 1048576
+
+  worker-gs:
+    image: lingbot-studio/worker-gs:latest
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.gs
+      args:
+        BASE_IMAGE: lingbot-studio/base:latest
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      DATA_DIR: /data
+      MODELS_DIR: /models
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_CLASS: gs
+    volumes:
+      - ./data:/data
+      - models:/models
+    depends_on:
+      - api
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "8gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+      nofile:
+        soft: 65536
+        hard: 1048576
+
   web:
     build:
       context: ./web
@@ -43,7 +157,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - worker
+      - api
 
 volumes:
   models:
