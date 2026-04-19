@@ -7,20 +7,35 @@ from typing import Callable
 
 import numpy as np
 
-from app.jobs.schema import JobConfig, JobEvent
+from app.jobs.schema import JobEvent, LingbotConfig, SlamConfig
 
 log = logging.getLogger(__name__)
 
 PublishFn = Callable[[JobEvent], "asyncio.Future | None"]
 
+# Any config that carries PreprocFields + an `fps` attr. Both lingbot and
+# SLAM configs qualify; gsplat doesn't run ingest so it's excluded.
+_IngestConfig = LingbotConfig | SlamConfig
 
-def build_ingest_filters(config: JobConfig) -> str:
+
+def build_ingest_filters(config: _IngestConfig) -> str:
     """Compose the -vf chain for frame extraction.
 
-    Order matters: fisheye unwrap first (geometric), then temporal denoise,
-    then deflicker, then fps resample. OSD masking runs after extraction in
-    Python since it needs a whole-sequence stddev pass.
+    Order (matters):
+
+      1. fisheye unwrap (geometric, changes pixel positions)
+      2. analog cleanup (atadenoise) — before hqdn3d so chroma noise is gone
+         first, avoiding hqdn3d eating detail trying to suppress it
+      3. hqdn3d + paired deflicker (existing `preproc_denoise`)
+      4. standalone deflicker (only if `preproc_deflicker` is on without
+         `preproc_denoise` — analog_cleanup.ffmpeg_snippet handles that)
+      5. fps resample
+
+    OSD masking + all Phase-3 Python stages run after ffmpeg extraction —
+    they need whole-sequence state (stddev, optical flow, Laplacian median).
     """
+    from app.pipeline.fpv_filters import analog_cleanup
+
     filters: list[str] = []
 
     if config.preproc_fisheye:
@@ -31,6 +46,8 @@ def build_ingest_filters(config: JobConfig) -> str:
             f"v360=input=fisheye:output=flat:"
             f"ih_fov={in_fov}:iv_fov={in_fov}:d_fov={out_fov}"
         )
+
+    filters.extend(analog_cleanup.ffmpeg_snippet(config))
 
     if config.preproc_denoise:
         # hqdn3d args: luma_spatial:chroma_spatial:luma_tmp:chroma_tmp
@@ -134,7 +151,7 @@ async def _publish(publish: PublishFn, event: JobEvent) -> None:
 async def apply_osd_mask(
     job_id: str,
     frames_dir: Path,
-    config: JobConfig,
+    config: _IngestConfig,
     publish: PublishFn,
 ) -> None:
     """Detect static overlay pixels and inpaint them out of every frame.

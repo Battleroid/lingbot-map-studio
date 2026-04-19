@@ -1,7 +1,7 @@
 "use client";
 
 import { Tip } from "@/components/Tip";
-import { type JobConfig, PRESETS } from "@/lib/types";
+import { type JobConfig, PREPROC_PRESETS, PRESETS } from "@/lib/types";
 
 interface Props {
   config: JobConfig;
@@ -69,6 +69,24 @@ const TIPS: Record<string, string> = {
     "Fraction of frames (0-1) where a pixel must be near an edge to be flagged as text. Higher = stricter (fewer false positives on scene edges), lower = more aggressive. 0.75 is a balanced default.",
   vram_soft_limit_gb:
     "Per-job VRAM soft limit in GB. A background watchdog samples GPU memory every 2s during inference; if allocated VRAM exceeds this, the job is aborted cleanly before the kernel kills the process. Leave blank to use the worker default (22 GB on a 24 GB card). The worker also enforces a hard process-wide cap to keep WSL2 from hanging the host.",
+  preproc_analog_cleanup:
+    "Heavier temporal denoise (atadenoise) tuned for VHS/analog chroma noise. Expensive — only enable for genuinely noisy captures where the standard hqdn3d pair still leaves dot crawl or chroma fringing. No-op on clean digital clips.",
+  preproc_deflicker:
+    "Standalone ffmpeg deflicker without the hqdn3d denoise pair. Useful when brightness jitter is the dominant problem and you don't want the spatial blurring that hqdn3d adds. Auto-skipped if `denoise + deflicker` is already on.",
+  preproc_color_norm:
+    "Per-frame grey-world white-balance + 1/99-percentile histogram stretch. Recovers natural colour on green/magenta-tinted analog feeds. Cheap, CPU-only.",
+  preproc_rs_correction:
+    "Global y-shear correction for rolling-shutter skew. Estimates a single px-per-row shear from optical flow between sampled frames, applies the inverse affine warp to every frame. Full per-row RS (needs gyro data) is out of scope.",
+  rs_shear_px_per_row:
+    "Override the estimated shear in pixels per row. Leave blank to let the estimator pick. Negative values tilt the other way. Values smaller than ±0.02 px/row skip the warp entirely.",
+  preproc_deblur:
+    "Motion-deblur strategy:\n• none — off (default, cheapest).\n• unsharp — classical unsharp-mask gated by per-frame Laplacian variance. Fast, CPU.\n• nafnet — learned single-image deblur (Phase 3 wires the hook; the checkpoint ships in a follow-up, falls back to unsharp for now).",
+  deblur_sharpness_gate:
+    "Apply the deblur filter only to frames whose Laplacian variance is below this fraction of the clip median. 1.0 = every frame, 0.6 (default) = the blurriest ~60%, 0.3 = only the worst offenders.",
+  preproc_keyframe_score:
+    "Write `frame_scores.jsonl` with per-frame sharpness and optical-flow magnitude. SLAM backends with `keyframe_policy=score_gated` read this to drop low-quality frames before keyframe selection. Cheap to leave on; downstream backends that don't consume it just ignore the file.",
+  preproc_preset:
+    "Bundled FPV preprocessing preset. Toggles all preproc_* fields at once; the basic sliders above are unaffected. `analog fpv (default)` enables the cheap stages (deflicker, colour norm, rolling-shutter, unsharp deblur, keyframe scoring). `aggressive` layers atadenoise on top. `none` disables everything.",
 };
 
 function NumberRow({
@@ -444,6 +462,125 @@ export function ConfigPanel({ config, onChange, readOnly, compact, title }: Prop
             )}
           </>
         )}
+
+        <div
+          style={{
+            marginTop: 6,
+            paddingTop: 6,
+            borderTop: "1px solid var(--rule)",
+          }}
+        >
+          <div className="section-title">fpv preprocessing</div>
+        </div>
+        {!readOnly && (
+          <div style={{ display: "flex", gap: 4 }}>
+            <Tip text={TIPS.preproc_preset} showIcon={false}>
+              <span className="section-title" style={{ opacity: 0.8 }}>
+                presets
+              </span>
+            </Tip>
+          </div>
+        )}
+        {!readOnly && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {Object.entries(PREPROC_PRESETS).map(([name, patch]) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => onChange(patch as Partial<JobConfig>)}
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        )}
+        <BoolRow
+          label="analog cleanup (atadenoise)"
+          tipKey="preproc_analog_cleanup"
+          value={config.preproc_analog_cleanup}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_analog_cleanup: v })}
+        />
+        <BoolRow
+          label="standalone deflicker"
+          tipKey="preproc_deflicker"
+          value={config.preproc_deflicker}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_deflicker: v })}
+        />
+        <BoolRow
+          label="colour normalisation"
+          tipKey="preproc_color_norm"
+          value={config.preproc_color_norm}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_color_norm: v })}
+        />
+        <BoolRow
+          label="rolling-shutter correction"
+          tipKey="preproc_rs_correction"
+          value={config.preproc_rs_correction}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_rs_correction: v })}
+        />
+        {!compact && config.preproc_rs_correction && (
+          <label className="stat">
+            <Tip text={TIPS.rs_shear_px_per_row}>
+              <span>rs · shear px/row</span>
+            </Tip>
+            <input
+              type="number"
+              value={config.rs_shear_px_per_row ?? ""}
+              step={0.01}
+              placeholder="auto"
+              readOnly={readOnly}
+              disabled={readOnly}
+              onChange={(e) =>
+                onChange({
+                  rs_shear_px_per_row:
+                    e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+            />
+          </label>
+        )}
+        <label className="stat">
+          <Tip text={TIPS.preproc_deblur}>
+            <span>deblur</span>
+          </Tip>
+          <select
+            value={config.preproc_deblur}
+            disabled={readOnly}
+            onChange={(e) =>
+              onChange({
+                preproc_deblur: e.target.value as JobConfig["preproc_deblur"],
+              })
+            }
+          >
+            <option value="none">none</option>
+            <option value="unsharp">unsharp</option>
+            <option value="nafnet">nafnet</option>
+          </select>
+        </label>
+        {!compact && config.preproc_deblur !== "none" && (
+          <NumberRow
+            label="deblur · sharpness gate"
+            tipKey="deblur_sharpness_gate"
+            value={config.deblur_sharpness_gate}
+            step={0.05}
+            min={0.1}
+            max={1.5}
+            readOnly={readOnly}
+            onChange={(v) => onChange({ deblur_sharpness_gate: v })}
+          />
+        )}
+        <BoolRow
+          label="keyframe scoring"
+          tipKey="preproc_keyframe_score"
+          value={config.preproc_keyframe_score}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ preproc_keyframe_score: v })}
+        />
 
         <div
           style={{

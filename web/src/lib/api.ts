@@ -194,6 +194,31 @@ export function osdPreviewUrl(
   return `${API_BASE}/api/drafts/${draftId}/preview/osd?${qs}`;
 }
 
+export type FpvPreviewStage =
+  | "color_norm"
+  | "deblur"
+  | "analog_cleanup"
+  | "rs_correction";
+
+export function fpvPreviewUrl(
+  draftId: string,
+  opts: {
+    stage: FpvPreviewStage;
+    shear?: number | null;
+    analog_cleanup?: boolean;
+    deflicker?: boolean;
+    v?: number;
+  },
+): string {
+  const qs = new URLSearchParams({ stage: opts.stage });
+  if (opts.shear !== undefined && opts.shear !== null)
+    qs.set("shear", String(opts.shear));
+  if (opts.analog_cleanup) qs.set("analog_cleanup", "true");
+  if (opts.deflicker) qs.set("deflicker", "true");
+  if (opts.v !== undefined) qs.set("_v", String(opts.v));
+  return `${API_BASE}/api/drafts/${draftId}/preview/fpv?${qs}`;
+}
+
 export function jobStreamUrl(jobId: string): string {
   const u = new URL(API_BASE);
   const proto = u.protocol === "https:" ? "wss:" : "ws:";

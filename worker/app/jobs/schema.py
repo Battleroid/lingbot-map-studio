@@ -65,12 +65,75 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class LingbotConfig(BaseModel):
+class PreprocFields(BaseModel):
+    """FPV-oriented preprocessing knobs shared between lingbot + SLAM.
+
+    Kept flat (no nested model) so legacy rows keep deserialising: Pydantic
+    fills in defaults for fields a stored JSON blob doesn't know about. The
+    mixin is inlined into each concrete config below rather than nested, so
+    `cfg.preproc_<stage>` continues to read the way existing ingest code
+    expects.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    # --- Geometric / optical pre-passes (ffmpeg) ---
+    preproc_fisheye: bool = False
+    fisheye_in_fov: float = 165.0
+    fisheye_out_fov: float = 90.0
+
+    # --- Analog noise / flicker cleanup (ffmpeg) ---
+    # `preproc_denoise` is the basic hqdn3d+deflicker pair (already present
+    # pre-Phase-3). `preproc_analog_cleanup` adds temporal `atadenoise` tuned
+    # for VHS/analog static — heavier, only use for genuinely noisy sources.
+    preproc_denoise: bool = False
+    preproc_analog_cleanup: bool = False
+    preproc_deflicker: bool = False  # standalone deflicker without the denoise pair
+
+    # --- OSD/HUD mask (Python post-extract) ---
+    preproc_osd_mask: bool = False
+    osd_mask_samples: int = 60
+    osd_mask_std_threshold: float = 5.0
+    osd_mask_dilate: int = 2
+    osd_detect_text: bool = True
+    osd_edge_persist_frac: float = 0.75
+
+    # --- Colour normalisation (Python post-extract) ---
+    # Grey-world white-balance + gamma-consistent per-frame histogram
+    # stretch. Cheap and very effective on VHS-era chroma fringing.
+    preproc_color_norm: bool = False
+
+    # --- Rolling-shutter correction (Python post-extract) ---
+    # v1 only handles dominant-skew case: estimates a global shear from
+    # optical flow between rows, applies an inverse y-shear per frame.
+    # Full per-row RS remains out of scope.
+    preproc_rs_correction: bool = False
+    # Optional explicit shear override; None = estimate from data.
+    rs_shear_px_per_row: Optional[float] = None
+
+    # --- Motion deblur (Python post-extract) ---
+    # "none" → off. "unsharp" → classical unsharp-mask + gating (fast, CPU).
+    # "nafnet" → learned single-image deblurring; Phase 3 ships the hook but
+    # the checkpoint fetcher lands with its own PR to avoid surprise VRAM use.
+    preproc_deblur: Literal["none", "unsharp", "nafnet"] = "none"
+    # Per-frame sharpness gate: only apply deblur to frames whose Laplacian
+    # variance falls below this fraction of the clip median. 1.0 = always,
+    # 0.5 = only the blurriest half, etc.
+    deblur_sharpness_gate: float = 0.6
+
+    # --- Keyframe scoring (Python post-extract) ---
+    # Produces `frame_scores.jsonl` next to the frames dir. Consumed by SLAM
+    # backends with a keyframe_policy="score_gated" and by the UI's live
+    # preview toolbar. No cost to emitting scores even when unused.
+    preproc_keyframe_score: bool = False
+    keyframe_min_sharpness_frac: float = 0.0  # drop frames below this quantile
+    keyframe_min_motion_px: float = 0.0  # drop frames with near-zero flow
+
+
+class LingbotConfig(PreprocFields):
     """Config for the existing dense-pointmap model. Unchanged from the
     original JobConfig — a `processor` discriminator is added so it can
     participate in the AnyJobConfig union."""
-
-    model_config = ConfigDict(protected_namespaces=())
 
     processor: Literal["lingbot"] = "lingbot"
 
@@ -103,23 +166,9 @@ class LingbotConfig(BaseModel):
     mask_black_bg: bool = False
     mask_white_bg: bool = False
 
-    # --- Preprocessing (applied during ffmpeg ingest / post-extract) ---
-    # Fisheye → rectilinear unwrap. Most FPV cams are ~155-170° in_fov; 90° out
-    # keeps the useful centre and trims the rim where distortion was worst.
-    preproc_fisheye: bool = False
-    fisheye_in_fov: float = 165.0
-    fisheye_out_fov: float = 90.0
-    # Temporal denoise + deflicker — kills analog static and brightness flicker.
-    preproc_denoise: bool = False
-    # Detect static pixels across frames and inpaint them out (OSD/telemetry overlays).
-    preproc_osd_mask: bool = False
-    osd_mask_samples: int = 60
-    osd_mask_std_threshold: float = 5.0
-    osd_mask_dilate: int = 2
-    # Second detector: flag pixels that live near an edge in >N% of sampled
-    # frames. Catches changing OSD digits that the stddev detector misses.
-    osd_detect_text: bool = True
-    osd_edge_persist_frac: float = 0.75
+    # Preprocessing fields (fisheye, denoise, OSD, analog cleanup, color
+    # normalisation, rolling shutter, deblur, keyframe scoring) come from
+    # the `PreprocFields` mixin above.
 
     # Per-job VRAM soft limit in GB. If allocated GPU memory crosses this during
     # inference the watchdog aborts the job. None = use worker-wide default.
@@ -131,12 +180,15 @@ class LingbotConfig(BaseModel):
     partial_snapshot_every: int = 60
 
 
-class SlamConfig(BaseModel):
+class SlamConfig(PreprocFields):
     """Stub for SLAM-mode jobs. Implemented in Phase 4 — this shape is the
     minimum the discriminated-union router + UI need to dispatch to the right
-    backend. Per-backend tunables are added alongside each processor."""
+    backend. Per-backend tunables are added alongside each processor.
 
-    model_config = ConfigDict(protected_namespaces=())
+    Inherits the same FPV preprocessing knobs as lingbot so a user can run the
+    exact same stages on a SLAM clip. SLAM backends with a score_gated
+    keyframe policy consume `frame_scores.jsonl` emitted by the keyframe
+    scorer."""
 
     processor: SlamBackend
     # Most SLAM backends publish a ply + pose graph; the shared fields below
@@ -152,14 +204,6 @@ class SlamConfig(BaseModel):
     cx: Optional[float] = None
     cy: Optional[float] = None
     keyframe_policy: Literal["score_gated", "translation", "hybrid"] = "score_gated"
-
-    # Shared preproc flags (a subset of lingbot's; Phase 3 introduces a richer
-    # PreprocConfig shared across all modes).
-    preproc_fisheye: bool = False
-    fisheye_in_fov: float = 165.0
-    fisheye_out_fov: float = 90.0
-    preproc_denoise: bool = False
-    preproc_osd_mask: bool = False
 
     vram_soft_limit_gb: Optional[float] = None
     partial_snapshot_every: int = 60

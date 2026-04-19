@@ -105,14 +105,50 @@ async def probe_video(path: Path) -> dict[str, Any]:
     }
 
 
+# Codecs typical of analog/DVR captures. h264/hevc on a modern container is
+# almost always digital; the codecs below are the ones that show up on VHS
+# rips, old DVRs, and the analog video receivers FPV pilots still use.
+_ANALOG_CODECS = {"mpeg4", "mpeg2video", "mpeg1video", "h263", "msmpeg4v2", "msmpeg4v3"}
+
+
+def _is_analog_fpv(probes: list[dict[str, Any]]) -> bool:
+    """Best-effort heuristic for `looks like an analog FPV capture`.
+
+    Signals:
+
+      * Resolution ≤ 720p (analog feeds top out around NTSC/PAL resolutions;
+        the DVR upscales to 480p/576p/720p).
+      * Bitrate under ~4 Mbps OR codec in the analog-era set. Either is
+        enough on its own — a high-bitrate MPEG-4 rip is still analog, and a
+        low-bitrate h264 capture is still likely an analog feed re-encoded.
+
+    False positives on low-bitrate screen recordings are acceptable: the
+    aggressive preproc preset is still safe, just a bit wasted.
+    """
+    max_height = max((p.get("height") or 0) for p in probes)
+    max_bitrate = max((p.get("bitrate") or 0) for p in probes)
+    codecs = {(p.get("codec") or "").lower() for p in probes}
+
+    if max_height and max_height > 720:
+        return False
+    if codecs & _ANALOG_CODECS:
+        return True
+    if max_bitrate and max_bitrate < 4_000_000:
+        return True
+    return False
+
+
 def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
     """Return a partial JobConfig patch derived from probed metadata.
 
     Rules:
       - target ~10 fps for reconstruction; cap at source fps.
-      - total frame estimate > 2500 → mode=windowed.
-      - height <= 720 or bitrate < 8 Mbps → treat as low-fi: mask_sky on,
-        conf_percentile 65, smaller num_scale_frames; else high-fi defaults.
+      - total frame estimate > 300 → mode=windowed.
+      - height ≤ 720 or bitrate < 8 Mbps → low-fi: mask_sky on, denoise+OSD on.
+      - analog heuristic (`_is_analog_fpv`) → aggressive preset: analog
+        cleanup, deflicker, color norm, rolling-shutter, unsharp deblur,
+        keyframe scoring. These are all no-ops on a clean digital clip, so
+        we only turn them on when the signal says the input is analog.
     """
     if not probes:
         return {}
@@ -138,6 +174,7 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
     max_bitrate = max((p.get("bitrate") or 0) for p in probes)
 
     low_fi = max_height <= 720 or (max_bitrate and max_bitrate < 8_000_000)
+    analog_fpv = _is_analog_fpv(probes)
 
     # Streaming mode's KV cache grows with keyframe count. Switch to windowed
     # for anything beyond ~300 frames so peak memory stays roughly flat.
@@ -169,4 +206,19 @@ def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
             preproc_denoise=False,
             preproc_osd_mask=False,
         )
+
+    if analog_fpv:
+        # Stack the Phase-3 aggressive preset on top. These stages run
+        # post-extraction and won't fire on a frame they can't improve
+        # (rolling_shutter skips when shear is sub-pixel, deblur skips
+        # already-sharp frames), so the cost is bounded by clip length.
+        patch.update(
+            preproc_analog_cleanup=True,
+            preproc_deflicker=True,
+            preproc_color_norm=True,
+            preproc_rs_correction=True,
+            preproc_deblur="unsharp",
+            preproc_keyframe_score=True,
+        )
+
     return patch

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { CompareSlider } from "@/components/CompareSlider";
-import { fisheyePreviewUrl, osdPreviewUrl } from "@/lib/api";
+import { fisheyePreviewUrl, fpvPreviewUrl, osdPreviewUrl } from "@/lib/api";
 import type { JobConfig } from "@/lib/types";
 
 interface Props {
@@ -117,6 +117,14 @@ export function PreprocPreview({ draftId, config }: Props) {
   const edgeFrac = useDebounced(config.osd_edge_persist_frac, 500);
   const useFisheye = config.preproc_fisheye;
   const useOsd = config.preproc_osd_mask;
+  const useColorNorm = config.preproc_color_norm;
+  const useRs = config.preproc_rs_correction;
+  const rsShear = useDebounced(config.rs_shear_px_per_row, 500);
+  const deblurMode = config.preproc_deblur;
+  const useDeblur = deblurMode !== "none";
+  const useAnalog = config.preproc_analog_cleanup;
+  const useDeflicker = config.preproc_deflicker;
+  const showAnalogFfmpeg = useAnalog || useDeflicker;
 
   const beforeUrl = useMemo(
     () => fisheyePreviewUrl(draftId, { side: "before" }),
@@ -156,7 +164,36 @@ export function PreprocPreview({ draftId, config }: Props) {
     ],
   );
 
-  if (!useFisheye && !useOsd) {
+  const colorNormUrl = useMemo(
+    () => fpvPreviewUrl(draftId, { stage: "color_norm" }),
+    [draftId],
+  );
+  const deblurUrl = useMemo(
+    () => fpvPreviewUrl(draftId, { stage: "deblur" }),
+    [draftId],
+  );
+  const rsUrl = useMemo(
+    () => fpvPreviewUrl(draftId, { stage: "rs_correction", shear: rsShear }),
+    [draftId, rsShear],
+  );
+  const analogUrl = useMemo(
+    () =>
+      fpvPreviewUrl(draftId, {
+        stage: "analog_cleanup",
+        analog_cleanup: useAnalog,
+        deflicker: useDeflicker,
+      }),
+    [draftId, useAnalog, useDeflicker],
+  );
+
+  const hasPreview =
+    useFisheye ||
+    useOsd ||
+    useColorNorm ||
+    useRs ||
+    useDeblur ||
+    showAnalogFfmpeg;
+  if (!hasPreview) {
     return (
       <div className="panel">
         <div className="panel-header">
@@ -166,8 +203,8 @@ export function PreprocPreview({ draftId, config }: Props) {
           className="panel-body"
           style={{ color: "var(--muted)", fontSize: "var(--fs-xs)" }}
         >
-          enable fisheye or osd masking to see a live preview of the first frame
-          with those operations applied.
+          enable any preprocessing stage to see a live preview of the first frame
+          with that operation applied.
         </div>
       </div>
     );
@@ -217,6 +254,93 @@ export function PreprocPreview({ draftId, config }: Props) {
     </section>
   );
 
+  const colorNormBlock = useColorNorm && (
+    <section
+      style={{ display: "grid", gap: 6 }}
+      aria-label="colour normalisation preview"
+    >
+      <div className="section-title">
+        <span>colour norm · drag to compare</span>
+      </div>
+      <CompareSlider
+        leftSrc={beforeUrl}
+        rightSrc={colorNormUrl}
+        leftLabel="before"
+        rightLabel="after"
+        alt="colour normalisation"
+      />
+    </section>
+  );
+
+  const rsBlock = useRs && (
+    <section
+      style={{ display: "grid", gap: 6 }}
+      aria-label="rolling-shutter preview"
+    >
+      <div
+        className="section-title"
+        style={{ display: "flex", justifyContent: "space-between" }}
+      >
+        <span>rolling-shutter · drag to compare</span>
+        <span style={{ color: "var(--muted)" }}>
+          {rsShear == null ? "shear · auto" : `shear · ${rsShear} px/row`}
+        </span>
+      </div>
+      <CompareSlider
+        leftSrc={beforeUrl}
+        rightSrc={rsUrl}
+        leftLabel="before"
+        rightLabel="after"
+        alt="rolling-shutter correction"
+      />
+    </section>
+  );
+
+  const deblurBlock = useDeblur && (
+    <section style={{ display: "grid", gap: 6 }} aria-label="deblur preview">
+      <div
+        className="section-title"
+        style={{ display: "flex", justifyContent: "space-between" }}
+      >
+        <span>deblur · drag to compare</span>
+        <span style={{ color: "var(--muted)" }}>{deblurMode}</span>
+      </div>
+      <CompareSlider
+        leftSrc={beforeUrl}
+        rightSrc={deblurUrl}
+        leftLabel="before"
+        rightLabel="after"
+        alt="motion deblur"
+      />
+    </section>
+  );
+
+  const analogBlock = showAnalogFfmpeg && (
+    <section
+      style={{ display: "grid", gap: 6 }}
+      aria-label="analog cleanup preview"
+    >
+      <div
+        className="section-title"
+        style={{ display: "flex", justifyContent: "space-between" }}
+      >
+        <span>analog ffmpeg · drag to compare</span>
+        <span style={{ color: "var(--muted)" }}>
+          {[useAnalog && "atadenoise", useDeflicker && "deflicker"]
+            .filter(Boolean)
+            .join(" + ")}
+        </span>
+      </div>
+      <CompareSlider
+        leftSrc={beforeUrl}
+        rightSrc={analogUrl}
+        leftLabel="before"
+        rightLabel="after"
+        alt="analog ffmpeg cleanup"
+      />
+    </section>
+  );
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -229,6 +353,10 @@ export function PreprocPreview({ draftId, config }: Props) {
       >
         {fisheyeBlock}
         {osdBlock}
+        {analogBlock}
+        {colorNormBlock}
+        {rsBlock}
+        {deblurBlock}
       </div>
     </div>
   );

@@ -45,7 +45,32 @@ export type SlamBackend = "droid_slam" | "mast3r_slam" | "dpvo" | "monogs";
 
 export type ProcessorKind = "reconstruction" | "slam" | "gsplat";
 
-export interface LingbotConfig {
+// FPV-oriented preprocessing knobs shared between lingbot + SLAM. Mirrors
+// the `PreprocFields` mixin in worker/app/jobs/schema.py.
+export interface PreprocFields {
+  preproc_fisheye: boolean;
+  fisheye_in_fov: number;
+  fisheye_out_fov: number;
+  preproc_denoise: boolean;
+  preproc_analog_cleanup: boolean;
+  preproc_deflicker: boolean;
+  preproc_osd_mask: boolean;
+  osd_mask_samples: number;
+  osd_mask_std_threshold: number;
+  osd_mask_dilate: number;
+  osd_detect_text: boolean;
+  osd_edge_persist_frac: number;
+  preproc_color_norm: boolean;
+  preproc_rs_correction: boolean;
+  rs_shear_px_per_row: number | null;
+  preproc_deblur: "none" | "unsharp" | "nafnet";
+  deblur_sharpness_gate: number;
+  preproc_keyframe_score: boolean;
+  keyframe_min_sharpness_frac: number;
+  keyframe_min_motion_px: number;
+}
+
+export interface LingbotConfig extends PreprocFields {
   processor: "lingbot";
 
   model_id: string;
@@ -71,25 +96,13 @@ export interface LingbotConfig {
   mask_black_bg: boolean;
   mask_white_bg: boolean;
 
-  // Preprocessing
-  preproc_fisheye: boolean;
-  fisheye_in_fov: number;
-  fisheye_out_fov: number;
-  preproc_denoise: boolean;
-  preproc_osd_mask: boolean;
-  osd_mask_samples: number;
-  osd_mask_std_threshold: number;
-  osd_mask_dilate: number;
-  osd_detect_text: boolean;
-  osd_edge_persist_frac: number;
-
   // Guardrails
   vram_soft_limit_gb: number | null;
   partial_snapshot_every?: number;
 }
 
 // SLAM config stub — Phase 4 extends with per-backend tunables.
-export interface SlamConfig {
+export interface SlamConfig extends PreprocFields {
   processor: SlamBackend;
   max_frames: number | null;
   downscale: number;
@@ -101,12 +114,6 @@ export interface SlamConfig {
   cx: number | null;
   cy: number | null;
   keyframe_policy: "score_gated" | "translation" | "hybrid";
-
-  preproc_fisheye: boolean;
-  fisheye_in_fov: number;
-  fisheye_out_fov: number;
-  preproc_denoise: boolean;
-  preproc_osd_mask: boolean;
 
   vram_soft_limit_gb: number | null;
   partial_snapshot_every: number;
@@ -276,12 +283,22 @@ export const DEFAULT_CONFIG: LingbotConfig = {
   fisheye_in_fov: 165,
   fisheye_out_fov: 90,
   preproc_denoise: false,
+  preproc_analog_cleanup: false,
+  preproc_deflicker: false,
   preproc_osd_mask: false,
   osd_mask_samples: 60,
   osd_mask_std_threshold: 5,
   osd_mask_dilate: 2,
   osd_detect_text: true,
   osd_edge_persist_frac: 0.75,
+  preproc_color_norm: false,
+  preproc_rs_correction: false,
+  rs_shear_px_per_row: null,
+  preproc_deblur: "none",
+  deblur_sharpness_gate: 0.6,
+  preproc_keyframe_score: false,
+  keyframe_min_sharpness_frac: 0,
+  keyframe_min_motion_px: 0,
   vram_soft_limit_gb: null,
 };
 
@@ -339,5 +356,44 @@ export const PRESETS: Record<string, Partial<LingbotConfig>> = {
     preproc_denoise: false,
     preproc_fisheye: false,
     preproc_osd_mask: false,
+  },
+};
+
+// FPV preprocessing presets. Applied on top of the currently-selected base
+// preset — these only touch the `preproc_*` fields so they compose.
+export const PREPROC_PRESETS: Record<string, Partial<PreprocFields>> = {
+  none: {
+    preproc_denoise: false,
+    preproc_analog_cleanup: false,
+    preproc_deflicker: false,
+    preproc_osd_mask: false,
+    preproc_color_norm: false,
+    preproc_rs_correction: false,
+    preproc_deblur: "none",
+    preproc_keyframe_score: false,
+  },
+  "analog fpv (default)": {
+    // Good default for a low-bitrate/DVR/analog-receiver capture. Keeps
+    // the cheap stages on and unsharp deblur active, skips the heavy
+    // atadenoise (use "aggressive" for that).
+    preproc_denoise: true,
+    preproc_deflicker: true,
+    preproc_osd_mask: true,
+    preproc_color_norm: true,
+    preproc_rs_correction: true,
+    preproc_deblur: "unsharp",
+    preproc_keyframe_score: true,
+  },
+  aggressive: {
+    // Everything on. Slow; reserve for visibly rough clips where the
+    // default preset still leaves artefacts.
+    preproc_denoise: true,
+    preproc_analog_cleanup: true,
+    preproc_deflicker: true,
+    preproc_osd_mask: true,
+    preproc_color_norm: true,
+    preproc_rs_correction: true,
+    preproc_deblur: "unsharp",
+    preproc_keyframe_score: true,
   },
 };

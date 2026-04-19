@@ -168,6 +168,131 @@ def _compute_osd_mask_sync(
     return mask
 
 
+async def render_fpv_preview(
+    video: Path,
+    out_png: Path,
+    stage: str,
+    timestamp: float,
+    params: dict,
+    work_dir: Path,
+) -> dict:
+    """Apply a single Phase-3 FPV preprocessing stage to a sampled frame.
+
+    Returns a dict with at least `{"path", "stage"}`; some stages add
+    extra metadata (e.g. estimated shear). The caller serves `out_png`
+    as the preview image.
+
+    Stage → sampling strategy:
+      * color_norm / deblur → single extracted frame, applied in-place.
+      * analog_cleanup → 2-second ffmpeg subclip through the atadenoise
+        chain, middle frame extracted. Temporal filter, so one frame
+        alone can't show it.
+      * rs_correction → two frames around the timestamp; either uses
+        `shear_override` or runs a single-sample Farneback estimate.
+    """
+    import cv2
+
+    from app.pipeline.fpv_filters import color_norm as cn_mod
+    from app.pipeline.fpv_filters import deblur as db_mod
+    from app.pipeline.fpv_filters import rolling_shutter as rs_mod
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    meta: dict = {"stage": stage}
+
+    if stage in ("color_norm", "deblur"):
+        src = work_dir / f"{stage}_src.png"
+        if not src.exists():
+            await extract_frame(video, src, timestamp=timestamp)
+        img = cv2.imread(str(src))
+        if img is None:
+            raise RuntimeError(f"could not read extracted frame at {src}")
+        if stage == "color_norm":
+            out = cn_mod._process_frame(img)
+        else:
+            # Previews always apply unsharp regardless of sharpness gate —
+            # the point is to show what the filter does, not reflect the
+            # clip-median gating.
+            out = db_mod._unsharp(img)
+        cv2.imwrite(str(out_png), out)
+        meta["path"] = str(out_png)
+        return meta
+
+    if stage == "analog_cleanup":
+        filters = params.get("filters") or []
+        if not filters:
+            # Fall back to plain extraction — caller should skip the preview.
+            await extract_frame(video, out_png, timestamp=timestamp)
+            meta["path"] = str(out_png)
+            meta["note"] = "no filters enabled"
+            return meta
+        clip = work_dir / "analog_clip.mp4"
+        if clip.exists():
+            clip.unlink()
+        chain = ",".join(filters)
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            str(max(0.0, timestamp - 1.0)),
+            "-i",
+            str(video),
+            "-t",
+            "2.0",
+            "-vf",
+            chain,
+            "-preset",
+            "ultrafast",
+            str(clip),
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"analog preview ffmpeg failed: {stderr.decode(errors='replace')}"
+            )
+        # Pull the middle frame out of the filtered clip.
+        await extract_frame(clip, out_png, timestamp=1.0)
+        meta["path"] = str(out_png)
+        meta["filters"] = filters
+        return meta
+
+    if stage == "rs_correction":
+        a_png = work_dir / "rs_a.png"
+        b_png = work_dir / "rs_b.png"
+        if not a_png.exists():
+            await extract_frame(video, a_png, timestamp=timestamp)
+        if not b_png.exists():
+            await extract_frame(video, b_png, timestamp=timestamp + 0.2)
+        shear_override = params.get("shear_override")
+        if shear_override is None:
+            shear = await asyncio.to_thread(rs_mod._estimate_shear, [a_png, b_png]) or 0.0
+        else:
+            shear = float(shear_override)
+        img = cv2.imread(str(a_png))
+        if img is None:
+            raise RuntimeError(f"could not read extracted frame at {a_png}")
+        import numpy as np
+
+        h, w = img.shape[:2]
+        m = np.array([[1.0, -shear, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+        warped = cv2.warpAffine(
+            img, m, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        )
+        cv2.imwrite(str(out_png), warped)
+        meta.update(path=str(out_png), shear_px_per_row=round(shear, 4))
+        return meta
+
+    raise RuntimeError(f"unknown fpv preview stage: {stage}")
+
+
 async def render_osd_preview(
     video: Path,
     work_dir: Path,

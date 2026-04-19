@@ -40,6 +40,7 @@ from app.pipeline.inference import load_cached_predictions
 from app.pipeline.preview import (
     apply_fisheye,
     extract_frame,
+    render_fpv_preview,
     render_osd_preview,
 )
 from app.pipeline.probe import probe_video, suggest_config
@@ -363,6 +364,88 @@ async def preview_osd(
             "X-Mask-Coverage": str(result.get("coverage", 0)),
             "X-Mask-Samples": str(result.get("samples", 0)),
         },
+    )
+
+
+_FPV_PREVIEW_STAGES = {"color_norm", "deblur", "analog_cleanup", "rs_correction"}
+
+
+@app.get("/api/drafts/{draft_id}/preview/fpv")
+async def preview_fpv(
+    draft_id: str,
+    stage: str,
+    shear: float | None = None,
+    analog_cleanup: bool = False,
+    deflicker: bool = False,
+) -> FileResponse:
+    """Return a PNG showing the effect of one Phase-3 FPV stage on a sampled frame.
+
+    `stage` must be one of `color_norm`, `deblur`, `analog_cleanup`,
+    `rs_correction`. `shear` overrides the rolling-shutter estimate.
+    `analog_cleanup`/`deflicker` toggle individual filters for the
+    `analog_cleanup` stage (they mirror the config flags so the preview
+    matches what ingest will actually run).
+    """
+    if stage not in _FPV_PREVIEW_STAGES:
+        raise HTTPException(status_code=422, detail=f"unknown stage: {stage}")
+
+    rec = drafts.load_draft(draft_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    sources = drafts.draft_video_paths(draft_id)
+    if not sources:
+        raise HTTPException(status_code=409, detail="draft has no uploaded files")
+    src_video = sources[0]
+    duration = rec.get("probes", [{}])[0].get("duration_s") if rec.get("probes") else None
+    ts = min(max(0.5, (duration or 0.0) * 0.1), max(0.5, (duration or 1.0) - 0.25))
+
+    preview_dir = drafts.draft_dir(draft_id) / "preview"
+    work_dir = preview_dir / "fpv"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    if stage == "analog_cleanup":
+        # Cache bucket differentiates which filters are composed for the preview.
+        filters: list[str] = []
+        if analog_cleanup:
+            filters.append(
+                "atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04:2a=0.02:2b=0.04"
+            )
+        if deflicker:
+            filters.append("deflicker=mode=pm:size=5")
+        key_bits = []
+        if analog_cleanup:
+            key_bits.append("ata")
+        if deflicker:
+            key_bits.append("dfl")
+        bucket = "_".join(key_bits) or "none"
+        out_png = preview_dir / f"fpv_analog_{bucket}.png"
+        params = {"filters": filters}
+    elif stage == "rs_correction":
+        shear_tag = "auto" if shear is None else f"{shear:+.3f}"
+        out_png = preview_dir / f"fpv_rs_{shear_tag}.png"
+        params = {"shear_override": shear}
+    else:
+        out_png = preview_dir / f"fpv_{stage}.png"
+        params = {}
+
+    if not out_png.exists():
+        try:
+            await render_fpv_preview(
+                video=src_video,
+                out_png=out_png,
+                stage=stage,
+                timestamp=ts,
+                params=params,
+                work_dir=work_dir,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(
+        out_png,
+        media_type="image/png",
+        filename=out_png.name,
+        headers={"Cache-Control": "public, max-age=300"},
     )
 
 
