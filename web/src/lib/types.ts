@@ -101,9 +101,11 @@ export interface LingbotConfig extends PreprocFields {
   partial_snapshot_every?: number;
 }
 
-// SLAM config stub — Phase 4 extends with per-backend tunables.
-export interface SlamConfig extends PreprocFields {
-  processor: SlamBackend;
+// Shared SLAM tunables. Phase 4's per-backend configs extend this; a plain
+// `SlamConfig` alias is exported below as the union of the four concrete
+// shapes so mode-aware UI code can narrow on the discriminator.
+export interface SlamConfigBase extends PreprocFields {
+  model_id: string;
   max_frames: number | null;
   downscale: number;
   stride: number;
@@ -114,10 +116,43 @@ export interface SlamConfig extends PreprocFields {
   cx: number | null;
   cy: number | null;
   keyframe_policy: "score_gated" | "translation" | "hybrid";
-
-  vram_soft_limit_gb: number | null;
+  keyframe_interval: number;
+  score_gate_quantile: number;
   partial_snapshot_every: number;
+  run_poisson_mesh: boolean;
+  poisson_depth: number;
+  vram_soft_limit_gb: number | null;
 }
+
+export interface DroidSlamConfig extends SlamConfigBase {
+  processor: "droid_slam";
+  buffer_size: number;
+  global_ba_iters: number;
+}
+
+export interface Mast3rSlamConfig extends SlamConfigBase {
+  processor: "mast3r_slam";
+  match_threshold: number;
+  window_size: number;
+}
+
+export interface DpvoConfig extends SlamConfigBase {
+  processor: "dpvo";
+  patch_per_frame: number;
+  buffer_keyframes: number;
+}
+
+export interface MonogsConfig extends SlamConfigBase {
+  processor: "monogs";
+  refine_iters: number;
+  prune_opacity: number;
+}
+
+export type SlamConfig =
+  | DroidSlamConfig
+  | Mast3rSlamConfig
+  | DpvoConfig
+  | MonogsConfig;
 
 // Gaussian-splat training config stub — Phase 5 extends.
 export interface GsplatConfig {
@@ -356,6 +391,87 @@ export const PRESETS: Record<string, Partial<LingbotConfig>> = {
     preproc_denoise: false,
     preproc_fisheye: false,
     preproc_osd_mask: false,
+  },
+};
+
+// Shared SLAM defaults. Each per-backend default spreads these, then adds
+// its own backend-specific tunables. Mirrors the defaults in
+// worker/app/jobs/schema.py (_SlamConfigBase) one-for-one.
+const _slamPreprocDefaults: PreprocFields = {
+  preproc_fisheye: false,
+  fisheye_in_fov: 165,
+  fisheye_out_fov: 90,
+  preproc_denoise: true,
+  preproc_analog_cleanup: true,
+  preproc_deflicker: true,
+  preproc_osd_mask: true,
+  osd_mask_samples: 60,
+  osd_mask_std_threshold: 5,
+  osd_mask_dilate: 2,
+  osd_detect_text: true,
+  osd_edge_persist_frac: 0.75,
+  preproc_color_norm: true,
+  preproc_rs_correction: true,
+  rs_shear_px_per_row: null,
+  preproc_deblur: "unsharp",
+  deblur_sharpness_gate: 0.6,
+  preproc_keyframe_score: true,
+  keyframe_min_sharpness_frac: 0,
+  keyframe_min_motion_px: 0,
+};
+
+const _slamBaseDefaults: SlamConfigBase = {
+  ..._slamPreprocDefaults,
+  model_id: "default",
+  max_frames: null,
+  downscale: 1,
+  stride: 1,
+  fps: 10,
+  calibration: "auto",
+  fx: null,
+  fy: null,
+  cx: null,
+  cy: null,
+  keyframe_policy: "score_gated",
+  keyframe_interval: 6,
+  score_gate_quantile: 0.5,
+  partial_snapshot_every: 5,
+  run_poisson_mesh: false,
+  poisson_depth: 8,
+  vram_soft_limit_gb: null,
+};
+
+export const DEFAULT_SLAM_CONFIGS: {
+  droid_slam: DroidSlamConfig;
+  mast3r_slam: Mast3rSlamConfig;
+  dpvo: DpvoConfig;
+  monogs: MonogsConfig;
+} = {
+  droid_slam: {
+    ..._slamBaseDefaults,
+    processor: "droid_slam",
+    keyframe_interval: 4,
+    buffer_size: 512,
+    global_ba_iters: 25,
+  },
+  mast3r_slam: {
+    ..._slamBaseDefaults,
+    processor: "mast3r_slam",
+    match_threshold: 0.1,
+    window_size: 16,
+  },
+  dpvo: {
+    ..._slamBaseDefaults,
+    processor: "dpvo",
+    patch_per_frame: 96,
+    buffer_keyframes: 2048,
+  },
+  monogs: {
+    ..._slamBaseDefaults,
+    processor: "monogs",
+    refine_iters: 50,
+    prune_opacity: 0.005,
+    run_poisson_mesh: false,
   },
 };
 

@@ -180,20 +180,18 @@ class LingbotConfig(PreprocFields):
     partial_snapshot_every: int = 60
 
 
-class SlamConfig(PreprocFields):
-    """Stub for SLAM-mode jobs. Implemented in Phase 4 — this shape is the
-    minimum the discriminated-union router + UI need to dispatch to the right
-    backend. Per-backend tunables are added alongside each processor.
+class _SlamConfigBase(PreprocFields):
+    """Shared SLAM tunables. Not used directly — one of the per-backend
+    subclasses below is the actual union member with its own discriminator.
 
-    Inherits the same FPV preprocessing knobs as lingbot so a user can run the
-    exact same stages on a SLAM clip. SLAM backends with a score_gated
-    keyframe policy consume `frame_scores.jsonl` emitted by the keyframe
-    scorer."""
+    Kept as a base class (rather than inlining fields into each subclass) so
+    the list of common knobs has exactly one definition. The per-backend
+    subclasses only carry the fields that materially differ between
+    implementations (buffer sizes, learning-rate caps, splat-specific params).
+    """
 
-    processor: SlamBackend
-    # Most SLAM backends publish a ply + pose graph; the shared fields below
-    # cover the common ingest/keyframe/calibration knobs. Per-backend configs
-    # extend this in Phase 4.
+    # Common to every backend.
+    model_id: str = "default"
     max_frames: Optional[int] = None
     downscale: float = 1.0
     stride: int = 1
@@ -204,9 +202,90 @@ class SlamConfig(PreprocFields):
     cx: Optional[float] = None
     cy: Optional[float] = None
     keyframe_policy: Literal["score_gated", "translation", "hybrid"] = "score_gated"
+    # Per-backend keyframe throttle; base default is 6 frames (matches
+    # lingbot's keyframe cadence). Backends with their own heuristic
+    # (MASt3R, MonoGS) override in config.
+    keyframe_interval: int = 6
+    # If score_gated: keep frames whose quality is above this percentile
+    # of the clip median. 0.5 = reject the blurriest half.
+    score_gate_quantile: float = 0.5
+    # Live preview: emit partial_splat/partial PLY + camera_path.json every
+    # N processed keyframes. 0 disables live updates.
+    partial_snapshot_every: int = 5
+    # Optional end-of-job Poisson meshing. Cheap wrapper over existing
+    # mesh.ops.surface_recon. Disabled for MonoGS (it emits a splat, not
+    # points) and DPVO (trajectory-only is often cleaner as-is).
+    run_poisson_mesh: bool = False
+    poisson_depth: int = 8
 
     vram_soft_limit_gb: Optional[float] = None
-    partial_snapshot_every: int = 60
+
+
+class DroidSlamConfig(_SlamConfigBase):
+    """DROID-SLAM. Dense optical-flow based; VRAM-heavy but globally
+    consistent on long indoor/outdoor sequences. Calibration should be
+    provided for best results — `auto` estimates from FOV but wobbles."""
+
+    processor: Literal["droid_slam"] = "droid_slam"
+    # Upstream caps tracked keyframes; we expose the buffer cap so users
+    # with 16 GB cards can drop it from the 512 default.
+    buffer_size: int = 512
+    # Every Nth frame becomes a DROID keyframe; DROID's own policy also
+    # adds extra keyframes when optical-flow magnitude is high.
+    keyframe_interval: int = 4
+    # Global bundle-adjustment iterations after the forward pass.
+    global_ba_iters: int = 25
+
+
+class Mast3rSlamConfig(_SlamConfigBase):
+    """MASt3R-SLAM. Calibration-free — the best default for analog FPV
+    footage where fx/fy aren't reliably known. Uses a score-gated keyframe
+    policy by default to drop blurred frames before tracking."""
+
+    processor: Literal["mast3r_slam"] = "mast3r_slam"
+    # MASt3R's own matcher threshold; lower = more matches per pair, more
+    # VRAM. 0.1 is the upstream default.
+    match_threshold: float = 0.1
+    # Frames per tracking window. Smaller windows are cheaper but miss
+    # loop closures on flythrough sequences.
+    window_size: int = 16
+
+
+class DpvoConfig(_SlamConfigBase):
+    """DPVO (Deep Patch VO). Lightweight patch-based VO; best for long
+    clips or low-VRAM machines. Produces a sparse cloud — enable
+    `run_poisson_mesh=False` and feed into a follow-on GS job for dense
+    reconstruction."""
+
+    processor: Literal["dpvo"] = "dpvo"
+    # Upstream default = 96 patches/frame. Lower = cheaper, less stable.
+    patch_per_frame: int = 96
+    # Max removed keyframes kept in the sparse cloud — higher = denser
+    # trajectory, more memory.
+    buffer_keyframes: int = 2048
+
+
+class MonogsConfig(_SlamConfigBase):
+    """MonoGS (Photo-SLAM variant). Gaussian-splat SLAM — emits a splat
+    scene incrementally. Short-circuits Phase 5: if a user picks MonoGS
+    they get a splat out of SLAM directly; the downstream gsplat training
+    job becomes optional."""
+
+    processor: Literal["monogs"] = "monogs"
+    # Refinement iterations after each keyframe is added to the splat.
+    refine_iters: int = 50
+    # Opacity prune threshold for the final scene.
+    prune_opacity: float = 0.005
+    # MonoGS doesn't produce a point cloud suitable for Poisson meshing.
+    run_poisson_mesh: bool = False
+
+
+# Keep the old name as a type alias so existing code (ingest.py, preproc.py)
+# that typed against SlamConfig continues to work. New code should reference
+# the specific per-backend class or _SlamConfigBase.
+SlamConfig = (
+    DroidSlamConfig | Mast3rSlamConfig | DpvoConfig | MonogsConfig
+)
 
 
 class GsplatConfig(BaseModel):
@@ -227,10 +306,17 @@ class GsplatConfig(BaseModel):
 
 
 # Discriminated union. Pydantic v2 picks the right class based on the
-# "processor" field. SlamConfig covers four literal values of the discriminator
-# which Pydantic folds into the union correctly.
+# "processor" field. Each SLAM backend gets its own member so per-backend
+# fields aren't hidden inside a shared shape.
 AnyJobConfig = Annotated[
-    Union[LingbotConfig, SlamConfig, GsplatConfig],
+    Union[
+        LingbotConfig,
+        DroidSlamConfig,
+        Mast3rSlamConfig,
+        DpvoConfig,
+        MonogsConfig,
+        GsplatConfig,
+    ],
     Field(discriminator="processor"),
 ]
 

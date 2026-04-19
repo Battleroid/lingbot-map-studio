@@ -40,12 +40,15 @@ WORKER_CLASSES: dict[str, str] = {
 }
 
 # Module path for each processor class. Loaded lazily by `load_processor`.
+# The SLAM entries now point at Phase-4 real processors; each falls back to a
+# simulated tracker when the upstream CUDA deps aren't present, but the
+# integration surface (`Processor` + `SlamSession`) is real.
 _MODULE_PATHS: dict[str, tuple[str, str]] = {
     "lingbot": ("app.processors.lingbot", "LingbotProcessor"),
-    "droid_slam": ("app.processors.slam.stub", "DroidSlamStubProcessor"),
-    "mast3r_slam": ("app.processors.slam.stub", "Mast3rSlamStubProcessor"),
-    "dpvo": ("app.processors.slam.stub", "DpvoStubProcessor"),
-    "monogs": ("app.processors.slam.stub", "MonogsStubProcessor"),
+    "droid_slam": ("app.processors.slam.droid_slam", "DroidSlamProcessor"),
+    "mast3r_slam": ("app.processors.slam.mast3r_slam", "Mast3rSlamProcessor"),
+    "dpvo": ("app.processors.slam.dpvo", "DpvoProcessor"),
+    "monogs": ("app.processors.slam.monogs", "MonogsProcessor"),
     "gsplat": ("app.processors.gsplat.stub", "GsplatStubProcessor"),
 }
 
