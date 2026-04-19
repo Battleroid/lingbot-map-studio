@@ -65,6 +65,67 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# --- Execution target (local container vs cloud provider) --------------
+
+
+ExecutionTarget = Literal[
+    "local",
+    "fake",
+    "runpod",
+    "runpod-serverless",
+    "vast",
+    "lambda_labs",
+    "paperspace-core",
+    "paperspace-gradient",
+    "aws-ec2",
+    "gcp-gce",
+    "azure-vm",
+]
+
+
+class InstanceSpec(BaseModel):
+    """Per-job provider-agnostic spec. Provider adapters translate this
+    into their native API shape (RunPod gpuTypeId, Vast offer query, EC2
+    InstanceType, etc.)."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    gpu_class: str = "rtx4090"
+    gpu_count: int = 1
+    disk_gb: int = 64
+    spot: bool = False
+    region: Optional[str] = None
+    # Docker image the provider will boot. Defaults to the provider
+    # adapter's `Dockerfile.remote`-built image.
+    image: Optional[str] = None
+    # Free-form env overrides merged on top of the dispatcher's standard
+    # env (STUDIO_BROKER_URL / STUDIO_JOB_TOKEN / WORKER_MODE / WORKER_CLASS).
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class ExecutionFields(BaseModel):
+    """Cross-cutting knobs every GPU-bearing processor config inherits.
+
+    Introduced in cloud-phase R1 alongside `InstanceSpec`. Kept as a
+    separate mixin (rather than stuffed into `PreprocFields`) so the
+    gsplat config — which has no preprocessing — still opts in cleanly
+    via multiple inheritance.
+
+    Defaulting `execution_target="local"` preserves pre-cloud behaviour
+    byte-for-byte: existing rows deserialise as local jobs and route
+    to the local claim loop exactly as they did before.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    execution_target: ExecutionTarget = "local"
+    instance_spec: Optional[InstanceSpec] = None
+    # Per-job ceiling on cloud spend in cents. `None` falls back to
+    # `settings.cloud_cost_cap_cents_default`. Dispatcher refuses to
+    # launch if `provider.estimate_cost(spec) > cost_cap_cents`.
+    cost_cap_cents: Optional[int] = None
+
+
 class PreprocFields(BaseModel):
     """FPV-oriented preprocessing knobs shared between lingbot + SLAM.
 
@@ -130,7 +191,7 @@ class PreprocFields(BaseModel):
     keyframe_min_motion_px: float = 0.0  # drop frames with near-zero flow
 
 
-class LingbotConfig(PreprocFields):
+class LingbotConfig(PreprocFields, ExecutionFields):
     """Config for the existing dense-pointmap model. Unchanged from the
     original JobConfig — a `processor` discriminator is added so it can
     participate in the AnyJobConfig union."""
@@ -180,7 +241,7 @@ class LingbotConfig(PreprocFields):
     partial_snapshot_every: int = 60
 
 
-class _SlamConfigBase(PreprocFields):
+class _SlamConfigBase(PreprocFields, ExecutionFields):
     """Shared SLAM tunables. Not used directly — one of the per-backend
     subclasses below is the actual union member with its own discriminator.
 
@@ -288,7 +349,7 @@ SlamConfig = (
 )
 
 
-class GsplatConfig(BaseModel):
+class GsplatConfig(ExecutionFields):
     """3D Gaussian Splat training mode.
 
     Consumes a completed SLAM (or Lingbot) job's output as initial state and

@@ -20,7 +20,9 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.cloud import dispatcher as cloud_dispatcher
 from app.cloud.broker import router as broker_router
+from app.cloud.providers import registered_ids as cloud_registered_ids
 from app.config import settings
 from app.jobs import cancel as cancel_mod
 from app.jobs import drafts, store
@@ -51,6 +53,64 @@ from app.utils.logging import configure_logging
 from app.utils.paths import new_job_id, safe_filename
 
 log = logging.getLogger(__name__)
+
+
+async def _maybe_dispatch_remote(job_id: str, config: Any) -> None:
+    """If the config targets a cloud provider, kick off the launch.
+
+    Local jobs return immediately — they run in the in-process worker's
+    claim loop exactly as before. Remote jobs call the dispatcher; on
+    failure we flip the row to `failed` and publish an error event so
+    the user sees what went wrong in the UI instead of a job that sits
+    in `queued` forever.
+    """
+    target = getattr(config, "execution_target", "local")
+    if target == "local":
+        return
+    try:
+        result = await cloud_dispatcher.launch(job_id, config)
+    except cloud_dispatcher.DispatchError as exc:
+        log.warning("dispatch failed for %s: %s", job_id, exc)
+        await store.update_job(job_id, status="failed", error=f"dispatch failed: {exc}")
+        await bus.publish(
+            JobEvent(
+                job_id=job_id,
+                stage="queue",
+                level="error",
+                message=f"remote dispatch failed: {exc}",
+            )
+        )
+        await bus.close(job_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("unexpected dispatch error for %s", job_id)
+        await store.update_job(
+            job_id, status="failed", error=f"dispatch crashed: {type(exc).__name__}: {exc}"
+        )
+        await bus.publish(
+            JobEvent(
+                job_id=job_id,
+                stage="queue",
+                level="error",
+                message=f"remote dispatch crashed: {exc}",
+            )
+        )
+        await bus.close(job_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="queue",
+            message=f"launched on {result.provider_id}",
+            data={
+                "provider": result.provider_id,
+                "instance_id": result.instance_handle.instance_id,
+                "region": result.instance_handle.region,
+                "gpu_class": result.instance_handle.gpu_class,
+                "cost_estimate_cents": result.cost_estimate_cents,
+            },
+        )
+    )
 
 
 async def _sweep_orphaned_jobs() -> None:
@@ -156,6 +216,56 @@ async def health() -> dict[str, Any]:
 async def list_jobs() -> list[dict[str, Any]]:
     rows = await store.list_jobs()
     return [r.model_dump(mode="json") for r in rows]
+
+
+@app.get("/api/cloud/providers")
+async def list_cloud_providers() -> dict[str, Any]:
+    """Advertise which execution targets are live in this deploy.
+
+    The frontend populates its ExecutionPanel dropdown from this list —
+    it avoids showing e.g. `aws-ec2` when boto3 isn't installed or no
+    credentials are configured. `"local"` is always included; the fake
+    provider surfaces in non-production builds for UI smoke tests.
+    """
+    ids = cloud_registered_ids()
+    return {
+        "targets": ["local", *ids],
+        "cost_cap_cents_default": settings.cloud_cost_cap_cents_default,
+    }
+
+
+@app.post("/api/cloud/estimate")
+async def estimate_cloud_cost(body: dict[str, Any]) -> dict[str, Any]:
+    """Return the predicted cost in cents for a given target + spec.
+
+    Used by `CostPreview` on a debounce in the browser; must be
+    side-effect-free. We intentionally don't mint a token or touch the
+    provider's billing endpoints here — each adapter's `estimate_cost`
+    is whatever the provider's public pricing API exposes (or a flat
+    constant for providers without one).
+    """
+    from app.cloud.providers import get as get_provider
+    from app.jobs.schema import InstanceSpec
+
+    target = body.get("execution_target")
+    if not target or target == "local":
+        return {"cents": 0, "expected_duration_s": 0}
+    spec_raw = body.get("instance_spec") or {}
+    try:
+        spec = InstanceSpec.model_validate(spec_raw)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"invalid instance_spec: {exc}") from exc
+    try:
+        provider = get_provider(target)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    duration_s = int(body.get("expected_duration_s") or 15 * 60)
+    cents = await provider.estimate_cost(spec, duration_s)
+    return {
+        "cents": cents,
+        "expected_duration_s": duration_s,
+        "target": target,
+    }
 
 
 @app.get("/api/jobs/{job_id}")
@@ -518,6 +628,9 @@ async def create_job(
             data={"worker_class": worker_class, "processor": config_obj.processor},
         )
     )
+    # Cloud jobs: kick off the remote launch. Local jobs bail out in the
+    # helper and the in-process claim loop picks the queued row up.
+    await _maybe_dispatch_remote(job_id, config_obj)
     return {"id": job_id}
 
 
@@ -573,6 +686,7 @@ async def create_gsplat_job(
             },
         )
     )
+    await _maybe_dispatch_remote(job_id, config_obj)
     return {"id": job_id}
 
 
@@ -719,6 +833,7 @@ async def restart_job(job_id: str) -> dict[str, str]:
             },
         )
     )
+    await _maybe_dispatch_remote(new_id, old.config)
     return {"id": new_id}
 
 

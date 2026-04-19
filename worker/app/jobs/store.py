@@ -60,6 +60,27 @@ class JobRow(Base):
         Boolean, nullable=False, default=False
     )
 
+    # --- Cloud execution bookkeeping (Phase R1) ---
+    # execution_target mirrors the config field; duplicated on the row so the
+    # dispatcher can filter jobs by target without parsing config_json.
+    execution_target: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="local"
+    )
+    # Stable provider-side id of the rented instance (pod id, EC2 instance-id,
+    # Vast contract id, …). NULL for local runs and before launch returns.
+    provider_instance_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    # Cost bookkeeping in integer cents to dodge float rounding.
+    provider_cost_estimate_cents: Mapped[Optional[int]] = mapped_column(nullable=True)
+    provider_cost_actual_cents: Mapped[Optional[int]] = mapped_column(nullable=True)
+    # Blake2b hash of the per-job HMAC token we minted. Enough to audit which
+    # token authorised a given run without keeping the raw token (short-lived
+    # anyway). NULL for local runs that never minted a token.
+    remote_worker_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+
 
 _engine = None
 _Session: async_sessionmaker[AsyncSession] | None = None
@@ -91,6 +112,12 @@ async def init_store() -> None:
             ("claimed_by", "ALTER TABLE jobs ADD COLUMN claimed_by TEXT"),
             ("claimed_at", "ALTER TABLE jobs ADD COLUMN claimed_at DATETIME"),
             ("cancel_requested", "ALTER TABLE jobs ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0"),
+            # Cloud Phase R1 — execution target + provider bookkeeping.
+            ("execution_target", "ALTER TABLE jobs ADD COLUMN execution_target TEXT NOT NULL DEFAULT 'local'"),
+            ("provider_instance_id", "ALTER TABLE jobs ADD COLUMN provider_instance_id TEXT"),
+            ("provider_cost_estimate_cents", "ALTER TABLE jobs ADD COLUMN provider_cost_estimate_cents INTEGER"),
+            ("provider_cost_actual_cents", "ALTER TABLE jobs ADD COLUMN provider_cost_actual_cents INTEGER"),
+            ("remote_worker_token_hash", "ALTER TABLE jobs ADD COLUMN remote_worker_token_hash TEXT"),
         ]
         for col, ddl in migrations:
             if col not in cols:
@@ -129,6 +156,11 @@ def worker_identity() -> str:
 
 
 async def create_job(job: Job, worker_class: str = "lingbot") -> None:
+    # `execution_target` is mirrored from the config onto its own column so the
+    # dispatcher can filter by target without parsing config_json. Configs that
+    # predate the ExecutionFields mixin (gsplat-pre-R1, for instance) fall back
+    # to the column default ("local").
+    execution_target = getattr(job.config, "execution_target", "local")
     async with session() as s:
         row = JobRow(
             id=job.id,
@@ -141,6 +173,7 @@ async def create_job(job: Job, worker_class: str = "lingbot") -> None:
             created_at=job.created_at,
             updated_at=job.updated_at,
             worker_class=worker_class,
+            execution_target=execution_target,
         )
         s.add(row)
         await s.commit()
@@ -340,6 +373,38 @@ async def sweep_stale_claims(stale_after_s: float) -> int:
     return reaped
 
 
+async def set_provider_bookkeeping(
+    job_id: str,
+    *,
+    provider_instance_id: Optional[str] = None,
+    cost_estimate_cents: Optional[int] = None,
+    cost_actual_cents: Optional[int] = None,
+    token_hash: Optional[str] = None,
+) -> None:
+    """Write cloud-provider bookkeeping fields on the job row.
+
+    Only fields that are non-None get written; this is an upsert-style helper
+    so the dispatcher can record `provider_instance_id` at launch, then later
+    a billing sweeper can bump `cost_actual_cents` without clobbering the
+    launch-time estimate.
+    """
+    now = datetime.now(timezone.utc)
+    async with session() as s:
+        async with s.begin():
+            row = await s.get(JobRow, job_id)
+            if row is None:
+                return
+            if provider_instance_id is not None:
+                row.provider_instance_id = provider_instance_id
+            if cost_estimate_cents is not None:
+                row.provider_cost_estimate_cents = cost_estimate_cents
+            if cost_actual_cents is not None:
+                row.provider_cost_actual_cents = cost_actual_cents
+            if token_hash is not None:
+                row.remote_worker_token_hash = token_hash
+            row.updated_at = now
+
+
 async def heartbeat(job_id: str, worker_id: Optional[str] = None) -> None:
     """Bump claimed_at so the stale-claim sweep doesn't reap an active job.
 
@@ -385,6 +450,7 @@ __all__ = [
     "release_job",
     "request_cancel",
     "session",
+    "set_provider_bookkeeping",
     "sweep_stale_claims",
     "text",
     "update_job",
