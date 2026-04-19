@@ -159,5 +159,49 @@ services:
     depends_on:
       - api
 
+  # Optional S3-compatible transit bucket for remote workers. Disabled by
+  # default; bring up with `docker compose --profile cloud-storage up`.
+  # When enabled, set CLOUD_STORAGE=minio on the api service so the broker
+  # vends pre-signed PUT URLs that target this bucket instead of routing
+  # artifact bytes through the broker process itself. The minio-bootstrap
+  # sidecar creates the bucket idempotently on first boot so there's no
+  # manual provisioning step.
+  minio:
+    image: minio/minio:latest
+    profiles: ["cloud-storage"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-lingbot}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-lingbot-minio-dev}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  minio-bootstrap:
+    image: minio/mc:latest
+    profiles: ["cloud-storage"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-lingbot}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-lingbot-minio-dev}
+      MINIO_BUCKET: ${MINIO_BUCKET:-lingbot-artifacts}
+    entrypoint: >-
+      sh -c "
+        mc alias set local http://minio:9000 $$MINIO_ACCESS_KEY $$MINIO_SECRET_KEY &&
+        mc mb --ignore-existing local/$$MINIO_BUCKET &&
+        mc anonymous set download local/$$MINIO_BUCKET
+      "
+    restart: "no"
+
 volumes:
   models:
+  minio:

@@ -532,3 +532,78 @@ async def test_job_binding_is_not_overridable_by_url(client: TestClient):
 
     assert (settings.job_artifacts("bkrbind02") / "stamp.bin").exists()
     assert not (settings.job_artifacts("bkrbind01") / "stamp.bin").exists()
+
+
+# --- R5: presign + commit + claim storage_kind -------------------------
+
+
+async def test_claim_advertises_broker_storage_by_default(client: TestClient):
+    await _seed_queued_lingbot("bkrstore01")
+    tok = _mint_token("bkrstore01")
+    r = client.post(
+        "/api/worker/claim",
+        json={"worker_class": "lingbot", "worker_id": "w1"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["storage_kind"] == "broker"
+
+
+async def test_presign_broker_returns_direct_put_path(client: TestClient):
+    await _seed_queued_lingbot("bkrpre01")
+    tok = _mint_token("bkrpre01")
+    r = client.post(
+        "/api/worker/artifacts/presign",
+        json={"name": "splat.ply"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+    upload = r.json()["upload"]
+    assert upload["mode"] == "broker"
+    assert upload["path"] == "/api/worker/artifacts/splat.ply"
+
+
+async def test_presign_rejects_path_traversal(client: TestClient):
+    await _seed_queued_lingbot("bkrpre02")
+    tok = _mint_token("bkrpre02")
+    r = client.post(
+        "/api/worker/artifacts/presign",
+        json={"name": "../../../etc/passwd"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 400
+
+
+async def test_commit_broker_passes_through(client: TestClient):
+    await _seed_queued_lingbot("bkrcom01")
+    tok = _mint_token("bkrcom01")
+
+    # PUT bytes first (broker flow), then commit confirms them.
+    r = client.put(
+        "/api/worker/artifacts/small.bin",
+        content=b"hello-r5",
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+
+    r = client.post(
+        "/api/worker/artifacts/commit",
+        json={"name": "small.bin"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "small.bin"
+    assert body["size_bytes"] == len(b"hello-r5")
+
+
+async def test_commit_missing_artifact_is_500(client: TestClient):
+    await _seed_queued_lingbot("bkrcom02")
+    tok = _mint_token("bkrcom02")
+    r = client.post(
+        "/api/worker/artifacts/commit",
+        json={"name": "never_put.bin"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 500
+    assert "not found" in r.json()["detail"]

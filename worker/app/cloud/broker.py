@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.cloud import storage as storage_mod
 from app.cloud import tokens as tokens_mod
 from app.config import settings
 from app.jobs import store
@@ -98,6 +99,31 @@ class ClaimResponse(BaseModel):
     job_id: str
     config: dict[str, Any]
     uploads: list[str] = Field(default_factory=list)
+    # Storage transport the remote worker must use when uploading
+    # artifacts. `broker` = PUT /api/worker/artifacts/{name}; `minio` =
+    # fetch a pre-signed PUT URL first via POST /artifacts/presign.
+    # Picked by the studio on claim so a compromised pod can't opt
+    # itself into a different upload path.
+    storage_kind: str = "broker"
+
+
+class PresignRequest(BaseModel):
+    name: str
+
+
+class PresignResponse(BaseModel):
+    # Opaque transport-specific blob: the worker reads `mode` and
+    # branches. See `cloud.storage.ArtifactStorage.presign_put`.
+    upload: dict[str, str]
+
+
+class CommitRequest(BaseModel):
+    name: str
+
+
+class CommitResponse(BaseModel):
+    name: str
+    size_bytes: int
 
 
 class HeartbeatRequest(BaseModel):
@@ -190,6 +216,7 @@ async def claim(
         job_id=_job_id,
         config=json.loads(config.model_dump_json()),
         uploads=upload_names,
+        storage_kind=storage_mod.active_storage().kind,
     )
 
 
@@ -297,6 +324,48 @@ async def put_artifact(
             content_length,
         )
     return {"name": name, "size_bytes": written}
+
+
+@router.post("/artifacts/presign", response_model=PresignResponse)
+async def presign_artifact(
+    body: PresignRequest,
+    token: tokens_mod.TokenPayload = Depends(require_scope("artifacts")),
+) -> PresignResponse:
+    """Vend an upload target for an artifact.
+
+    For `broker` storage the returned `upload` dict just tells the
+    worker to PUT to the usual `/api/worker/artifacts/{name}` path;
+    for `minio` it's a pre-signed PUT URL against the configured bucket.
+    The worker uploads per the returned shape then calls `/commit`.
+
+    Kept in the same `artifacts` scope as `PUT /artifacts/{name}` so
+    swapping the storage backend doesn't rotate token shapes.
+    """
+    if "/" in body.name or ".." in body.name or body.name.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid artifact name")
+    upload = await storage_mod.active_storage().presign_put(token.job_id, body.name)
+    return PresignResponse(upload=upload)
+
+
+@router.post("/artifacts/commit", response_model=CommitResponse)
+async def commit_artifact(
+    body: CommitRequest,
+    token: tokens_mod.TokenPayload = Depends(require_scope("artifacts")),
+) -> CommitResponse:
+    """Finalize an uploaded artifact.
+
+    For `broker` storage this is a pass-through that just verifies the
+    file landed (the PUT handler already wrote it). For `minio` it
+    pulls the uploaded object into the local artifacts dir so the
+    viewer can read it, then deletes the remote copy.
+    """
+    if "/" in body.name or ".." in body.name or body.name.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid artifact name")
+    try:
+        size = await storage_mod.active_storage().commit(token.job_id, body.name)
+    except storage_mod.StorageError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return CommitResponse(name=body.name, size_bytes=size)
 
 
 @router.get("/cancel")

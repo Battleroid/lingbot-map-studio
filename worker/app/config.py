@@ -71,6 +71,25 @@ class Settings(BaseSettings):
     azure_subscription_id: str = ""
     azure_region_default: str = "eastus"
 
+    # --- Artifact storage transport (Phase R5). ---
+    # Remote workers upload artifacts through one of two backends:
+    # - `broker` (default): chunked PUT to /api/worker/artifacts/{name},
+    #   same volume that already served local jobs.
+    # - `minio`: dispatcher-issued pre-signed PUT URL to an S3-compatible
+    #   bucket. The studio pulls bytes back locally on finalize so the
+    #   viewer still reads from the artifacts dir. Enabled by setting
+    #   `cloud_storage="minio"` and populating the minio_* fields.
+    cloud_storage: str = "broker"
+    minio_endpoint_url: str = "http://minio:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "lingbot-artifacts"
+    minio_region: str = "us-east-1"
+    # TTL for pre-signed PUT URLs handed to remote workers. Long enough
+    # to upload a multi-hundred-MB splat on a slow uplink; short enough
+    # that a leaked URL times out before it's useful.
+    minio_presign_ttl_s: int = 15 * 60
+
     model_config = SettingsConfigDict(env_file=None, case_sensitive=False)
 
     def ensure_dirs(self) -> None:

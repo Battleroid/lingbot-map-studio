@@ -100,6 +100,10 @@ class HttpJobSource(JobSource):
         # loop cheap during a long gsplat training run (one `os.stat`
         # per file per tick, no network traffic).
         self._artifact_sync_state: dict[str, dict[Path, tuple[int, int]]] = {}
+        # Per-job artifact storage mode, learned from the claim response.
+        # Defaults to "broker" (PUT straight to the broker) if the
+        # studio didn't announce one, which preserves pre-R5 behaviour.
+        self._storage_kind: dict[str, str] = {}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -128,6 +132,11 @@ class HttpJobSource(JobSource):
         job_id = body["job_id"]
         config = parse_job_config(body["config"])
         upload_names: list[str] = body.get("uploads", [])
+        # Studio-chosen storage transport (broker | minio). Remembered
+        # per-job so subsequent artifact uploads for this job use the
+        # matching path. Falling back to "broker" keeps pre-R5 behaviour
+        # for older studios that don't send the field.
+        self._storage_kind[job_id] = str(body.get("storage_kind") or "broker")
 
         scratch = self._scratch_dir_for(job_id)
         uploads_dir = scratch / "uploads"
@@ -204,7 +213,7 @@ class HttpJobSource(JobSource):
                     src,
                 )
                 continue
-            await self._upload_file(f"/api/worker/artifacts/{art.name}", src)
+            await self._upload_artifact(job_id, art.name, src)
 
         resp = await self._client.post(
             "/api/worker/artifacts_manifest",
@@ -300,7 +309,7 @@ class HttpJobSource(JobSource):
             if previous is None and st.st_size == 0:
                 continue
             try:
-                await self._upload_file(f"/api/worker/artifacts/{path.name}", path)
+                await self._upload_artifact(job_id, path.name, path)
             except Exception as exc:  # noqa: BLE001
                 log.warning("artifact sync failed for %s: %s", path.name, exc)
                 continue
@@ -408,6 +417,60 @@ class HttpJobSource(JobSource):
             headers={"Content-Length": str(size)},
         )
         resp.raise_for_status()
+
+    async def _upload_artifact(self, job_id: str, name: str, path: Path) -> None:
+        """Upload an artifact via whichever transport the studio picked.
+
+        For `broker` storage this is one PUT to the broker's artifact
+        endpoint (unchanged from R1 behaviour). For `minio` it's:
+            1. POST /artifacts/presign → pre-signed PUT URL
+            2. PUT the URL directly (no auth header — the URL is signed)
+            3. POST /artifacts/commit so the studio pulls the object
+               down into the job's local artifacts dir.
+        The worker never sees raw MinIO credentials; they stay broker-side.
+        """
+        kind = self._storage_kind.get(job_id, "broker")
+        if kind == "broker":
+            await self._upload_file(f"/api/worker/artifacts/{name}", path)
+            # Commit is a no-op on broker storage but keeps the flow
+            # symmetric — callers can assume an artifact is visible to
+            # the studio's viewer only after `commit` returns.
+            resp = await self._client.post(
+                "/api/worker/artifacts/commit", json={"name": name}
+            )
+            resp.raise_for_status()
+            return
+
+        if kind == "minio":
+            presign = await self._client.post(
+                "/api/worker/artifacts/presign", json={"name": name}
+            )
+            presign.raise_for_status()
+            upload = presign.json().get("upload") or {}
+            url = upload.get("url")
+            if not url:
+                raise RuntimeError(
+                    f"minio presign returned no URL: {upload!r}"
+                )
+            # Pre-signed URL: use a bare httpx client without our auth
+            # header so the Authorization line doesn't collide with
+            # whatever signing scheme MinIO expects. Keep the same
+            # chunking profile as the broker path.
+            size = path.stat().st_size
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_s)) as bare:
+                resp = await bare.put(
+                    url,
+                    content=_file_astream(path),
+                    headers={"Content-Length": str(size)},
+                )
+                resp.raise_for_status()
+            commit = await self._client.post(
+                "/api/worker/artifacts/commit", json={"name": name}
+            )
+            commit.raise_for_status()
+            return
+
+        raise RuntimeError(f"unknown storage kind {kind!r}")
 
 
 async def _file_astream(path: Path):
