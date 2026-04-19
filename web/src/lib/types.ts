@@ -154,18 +154,43 @@ export type SlamConfig =
   | DpvoConfig
   | MonogsConfig;
 
-// Gaussian-splat training config stub — Phase 5 extends.
+// Gaussian-splat training config. Mirrors worker/app/jobs/schema.py.
 export interface GsplatConfig {
   processor: "gsplat";
   source_job_id: string;
   iterations: number;
   sh_degree: number;
   densify_interval: number;
+  prune_interval: number;
   prune_opacity: number;
   init_from: "point_cloud" | "random";
+  random_init_count: number;
+  initial_resolution: number;
+  upsample_at_iter: number;
   preview_every_iters: number;
+  preview_max_gaussians: number;
+  bake_mesh_after: boolean;
+  bake_mesh_depth: number;
   vram_soft_limit_gb: number | null;
 }
+
+export const DEFAULT_GSPLAT_CONFIG: Omit<GsplatConfig, "source_job_id"> = {
+  processor: "gsplat",
+  iterations: 30_000,
+  sh_degree: 3,
+  densify_interval: 500,
+  prune_interval: 200,
+  prune_opacity: 0.005,
+  init_from: "point_cloud",
+  random_init_count: 100_000,
+  initial_resolution: 0.5,
+  upsample_at_iter: 5_000,
+  preview_every_iters: 1_000,
+  preview_max_gaussians: 500_000,
+  bake_mesh_after: false,
+  bake_mesh_depth: 10,
+  vram_soft_limit_gb: null,
+};
 
 export type AnyJobConfig = LingbotConfig | SlamConfig | GsplatConfig;
 

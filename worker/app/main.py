@@ -26,6 +26,7 @@ from app.jobs import drafts, store
 from app.jobs.events import bus
 from app.jobs.schema import (
     Artifact,
+    GsplatConfig,
     Job,
     JobEvent,
     LingbotConfig,
@@ -33,6 +34,7 @@ from app.jobs.schema import (
     ReexportRequest,
     parse_job_config,
 )
+from app.processors.gsplat import io as gsplat_io
 from app.processors import worker_class_for
 from app.mesh.ops import apply_op, mesh_summary
 from app.pipeline.export import reexport
@@ -508,6 +510,61 @@ async def create_job(
             stage="queue",
             message=f"enqueued for worker-{worker_class}",
             data={"worker_class": worker_class, "processor": config_obj.processor},
+        )
+    )
+    return {"id": job_id}
+
+
+@app.post("/api/jobs/gsplat-from/{source_job_id}", status_code=201)
+async def create_gsplat_job(
+    source_job_id: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Start a gsplat training job from a completed SLAM or Lingbot job.
+
+    Thin convenience over `POST /api/jobs`: looks up the source job,
+    validates it's a viable gsplat input, builds a default GsplatConfig,
+    and enqueues. `overrides` (JSON body) merges onto the default config
+    so the UI can surface training knobs without needing the full shape.
+    """
+    source = await store.get_job(source_job_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source job not found")
+    try:
+        gsplat_io.resolve_inputs(source)
+    except gsplat_io.GsplatInputsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    base: dict[str, Any] = {"processor": "gsplat", "source_job_id": source_job_id}
+    if overrides:
+        # Overrides can set training knobs but can't reroute the source —
+        # the path parameter is authoritative.
+        overrides = {k: v for k, v in overrides.items() if k not in {"processor", "source_job_id"}}
+        base.update(overrides)
+
+    try:
+        config_obj = parse_job_config(base)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"invalid gsplat overrides: {exc}") from exc
+    if not isinstance(config_obj, GsplatConfig):
+        raise HTTPException(status_code=500, detail="expected gsplat config")
+
+    worker_class = worker_class_for(config_obj)
+    job_id = new_job_id()
+    # gsplat jobs don't take uploads — they read from the source job.
+    settings.job_uploads(job_id).mkdir(parents=True, exist_ok=True)
+    job = Job(id=job_id, status="queued", config=config_obj, uploads=[])
+    await store.create_job(job, worker_class=worker_class)
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="queue",
+            message=f"gsplat queued (source={source_job_id})",
+            data={
+                "worker_class": worker_class,
+                "processor": "gsplat",
+                "source_job_id": source_job_id,
+            },
         )
     )
     return {"id": job_id}

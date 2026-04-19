@@ -289,19 +289,48 @@ SlamConfig = (
 
 
 class GsplatConfig(BaseModel):
-    """Stub for the GS training mode. Consumes a completed SLAM (or lingbot)
-    job's output. Implemented in Phase 5."""
+    """3D Gaussian Splat training mode.
+
+    Consumes a completed SLAM (or Lingbot) job's output as initial state and
+    trains a 3DGS scene with gsplat. See the Phase 5 plan for why this is a
+    plain BaseModel rather than a `PreprocFields` descendant — ingest and
+    preprocessing happen on the *source* job; the GS job only reads that
+    job's `reconstruction.ply` + `pose_graph.json`.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
 
     processor: Literal["gsplat"] = "gsplat"
+    # The job whose frames, poses, and sparse cloud seed this training run.
+    # Enforced `ready` by the API on enqueue.
     source_job_id: str
     iterations: int = 30_000
+    # Spherical-harmonic degree. 0 = RGB only (cheapest), 3 = full (default).
     sh_degree: int = 3
+    # Densification cadence (in iterations) and opacity prune threshold.
     densify_interval: int = 500
+    # Iterations between opacity pruning passes. Gaussians with alpha below
+    # `prune_opacity` get dropped.
+    prune_interval: int = 200
     prune_opacity: float = 0.005
+    # Seeding strategy. `point_cloud` initialises means + colours from the
+    # source job's `reconstruction.ply`; `random` samples from a unit sphere.
     init_from: Literal["point_cloud", "random"] = "point_cloud"
-    preview_every_iters: int = 1000
+    # How many random gaussians when init_from="random". Ignored otherwise.
+    random_init_count: int = 100_000
+    # Resolution schedule — train at `initial_resolution` then upsample.
+    # 1.0 = full, 0.25 = quarter-res warmup. A single float means constant.
+    initial_resolution: float = 0.5
+    upsample_at_iter: int = 5_000
+    # Live preview cadence — every N iterations publish a `partial_splat.ply`.
+    preview_every_iters: int = 1_000
+    # Cap partial-snapshot cloud size so browser playback stays smooth.
+    preview_max_gaussians: int = 500_000
+    # Optional bake-to-mesh after training (SuGaR-lite path). Disabled by
+    # default; user invokes via the splat tool panel in Phase 6.
+    bake_mesh_after: bool = False
+    bake_mesh_depth: int = 10
+
     vram_soft_limit_gb: Optional[float] = None
 
 

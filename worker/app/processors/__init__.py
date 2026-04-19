@@ -49,7 +49,7 @@ _MODULE_PATHS: dict[str, tuple[str, str]] = {
     "mast3r_slam": ("app.processors.slam.mast3r_slam", "Mast3rSlamProcessor"),
     "dpvo": ("app.processors.slam.dpvo", "DpvoProcessor"),
     "monogs": ("app.processors.slam.monogs", "MonogsProcessor"),
-    "gsplat": ("app.processors.gsplat.stub", "GsplatStubProcessor"),
+    "gsplat": ("app.processors.gsplat.trainer", "GsplatProcessor"),
 }
 
 # Populated on demand by `load_processor`. Caches the concrete class so we

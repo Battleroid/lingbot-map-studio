@@ -115,6 +115,17 @@ export function deleteJob(id: string): Promise<{ deleted: true }> {
   return fetchJson(`/api/jobs/${id}`, { method: "DELETE" });
 }
 
+/** Kick off a gsplat training job seeded from a completed SLAM/Lingbot job. */
+export function createGsplatJobFromSource(
+  sourceJobId: string,
+  overrides?: Record<string, unknown>,
+): Promise<{ id: string }> {
+  return fetchJson(`/api/jobs/gsplat-from/${sourceJobId}`, {
+    method: "POST",
+    body: JSON.stringify(overrides ?? {}),
+  });
+}
+
 export function stopJob(
   id: string,
   force = false,
