@@ -66,17 +66,28 @@ def _apply_vram_cap() -> None:
 def _build_job_source() -> JobSource:
     """Pick a transport from env. Default is the shared-volume local source.
 
-    `WORKER_MODE=remote` swaps in the HTTP source (arrives in the next
-    slice — for now, unrecognised values fail fast so misconfigured pods
-    don't silently process nothing).
+    `WORKER_MODE=remote` constructs an `HttpJobSource` from the broker
+    URL + per-job token that the dispatcher injected when launching
+    this pod. Mis-configured values fail fast so a misconfigured pod
+    doesn't silently process nothing (or worse, claim a random job).
     """
     mode = os.environ.get("WORKER_MODE", "local").lower()
     if mode == "local":
         return LocalJobSource()
     if mode == "remote":
-        raise RuntimeError(
-            "WORKER_MODE=remote requires HttpJobSource, not yet landed"
-        )
+        broker_url = os.environ.get("STUDIO_BROKER_URL")
+        token = os.environ.get("STUDIO_JOB_TOKEN")
+        if not broker_url:
+            raise RuntimeError(
+                "WORKER_MODE=remote requires STUDIO_BROKER_URL in env"
+            )
+        if not token:
+            raise RuntimeError(
+                "WORKER_MODE=remote requires STUDIO_JOB_TOKEN in env"
+            )
+        from app.cloud import HttpJobSource
+
+        return HttpJobSource(base_url=broker_url, token=token)
     raise RuntimeError(f"unknown WORKER_MODE={mode!r}")
 
 

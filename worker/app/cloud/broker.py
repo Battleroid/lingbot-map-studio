@@ -120,8 +120,35 @@ class SetStatusRequest(BaseModel):
     status: JobStatus
 
 
+class SetErrorRequest(BaseModel):
+    """Record an error message without advancing status or closing the bus.
+
+    The runner's error path does `set_error` + `set_status(failed|cancelled)`
+    + `publish_event(...)` in order. If `set_error` rode `/terminal`, the
+    bus would close before the trailing event landed. Kept separate for
+    the same reason `/artifacts_manifest` is.
+    """
+
+    error: str
+
+
 class SetFramesTotalRequest(BaseModel):
     frames_total: int
+
+
+class SetArtifactsRequest(BaseModel):
+    """Manifest-only artifact update.
+
+    Bytes land via `PUT /artifacts/{name}` ahead of this call. This
+    endpoint records the list on the job row without advancing status,
+    closing the event stream, or releasing the claim — those steps
+    stay on `/status` / `/terminal`. Kept separate from `/terminal`
+    so mid-run manifest updates (e.g. a processor that reports its
+    final artifact list before its terminal event) don't trigger
+    `bus.close` and cut live WS tailers off early.
+    """
+
+    artifacts: list[Artifact] = Field(default_factory=list)
 
 
 # --- endpoints ---------------------------------------------------------
@@ -304,6 +331,41 @@ async def set_frames_total(
     token: tokens_mod.TokenPayload = Depends(require_scope("terminal")),
 ) -> dict[str, Any]:
     await store.update_job(token.job_id, frames_total=body.frames_total)
+    return {"ok": True}
+
+
+@router.post("/artifacts_manifest")
+async def set_artifacts_manifest(
+    body: SetArtifactsRequest,
+    token: tokens_mod.TokenPayload = Depends(require_scope("terminal")),
+) -> dict[str, Any]:
+    await store.update_job(token.job_id, artifacts=body.artifacts)
+    return {"ok": True, "count": len(body.artifacts)}
+
+
+@router.post("/error")
+async def set_error(
+    body: SetErrorRequest,
+    token: tokens_mod.TokenPayload = Depends(require_scope("terminal")),
+) -> dict[str, Any]:
+    await store.update_job(token.job_id, error=body.error)
+    return {"ok": True}
+
+
+@router.post("/close_events")
+async def close_events(
+    token: tokens_mod.TokenPayload = Depends(require_scope("terminal")),
+) -> dict[str, Any]:
+    """Write the `events.done` breadcrumb so WS tailers exit.
+
+    The runner's `finally` block always closes events after the last
+    event lands. `/terminal` closes too, but the runner does not
+    always hit `/terminal` — on the error path it uses
+    `/status` + `/error` + a trailing event. Having a dedicated close
+    keeps the WS-close behaviour symmetric between local and remote
+    runs without forcing a terminal-shaped call.
+    """
+    await bus.close(token.job_id)
     return {"ok": True}
 
 

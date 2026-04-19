@@ -446,6 +446,69 @@ async def test_terminal_records_failure(client: TestClient):
     assert row.error == "remote worker blew up"
 
 
+async def test_artifacts_manifest_updates_row_without_closing_bus(
+    client: TestClient, tmp_data_dir: Path
+):
+    """`/artifacts_manifest` records the list but must NOT write events.done.
+
+    A premature bus close would cut a live WS tailer off mid-job when
+    the runner is just reporting a partial manifest.
+    """
+    from app.jobs import store
+
+    await _seed_queued_lingbot("bkrman01")
+    tok = _mint_token("bkrman01")
+
+    r = client.post(
+        "/api/worker/artifacts_manifest",
+        json={"artifacts": [{"name": "a.glb", "kind": "glb", "size_bytes": 1}]},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+
+    row = await store.get_job("bkrman01")
+    assert row is not None
+    assert [a.name for a in row.artifacts] == ["a.glb"]
+    # No events.done — the stream is still live.
+    assert not (tmp_data_dir / "jobs" / "bkrman01" / "events.done").exists()
+
+
+async def test_error_endpoint_records_without_closing_bus(
+    client: TestClient, tmp_data_dir: Path
+):
+    from app.jobs import store
+
+    await _seed_queued_lingbot("bkrerr01")
+    tok = _mint_token("bkrerr01")
+
+    r = client.post(
+        "/api/worker/error",
+        json={"error": "something went wrong"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+
+    row = await store.get_job("bkrerr01")
+    assert row is not None and row.error == "something went wrong"
+    # Status is unchanged — `/error` only writes the error column.
+    assert row.status == "queued"
+    assert not (tmp_data_dir / "jobs" / "bkrerr01" / "events.done").exists()
+
+
+async def test_close_events_writes_done_breadcrumb(
+    client: TestClient, tmp_data_dir: Path
+):
+    await _seed_queued_lingbot("bkrclose01")
+    tok = _mint_token("bkrclose01")
+
+    r = client.post(
+        "/api/worker/close_events",
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200
+    assert (tmp_data_dir / "jobs" / "bkrclose01" / "events.done").exists()
+
+
 async def test_job_binding_is_not_overridable_by_url(client: TestClient):
     """Artifact/upload endpoints use the token's jid, not the URL's job_id.
 

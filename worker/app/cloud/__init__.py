@@ -16,4 +16,14 @@ from __future__ import annotations
 
 from app.cloud.sources import ClaimedJob, JobSource, LocalJobSource
 
-__all__ = ["ClaimedJob", "JobSource", "LocalJobSource"]
+__all__ = ["ClaimedJob", "JobSource", "LocalJobSource", "HttpJobSource"]
+
+
+def __getattr__(name: str):
+    """Lazily import `HttpJobSource` — it drags in `httpx` which is
+    only installed in the remote-worker image."""
+    if name == "HttpJobSource":
+        from app.cloud.http_source import HttpJobSource
+
+        return HttpJobSource
+    raise AttributeError(name)
