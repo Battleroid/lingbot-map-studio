@@ -405,6 +405,35 @@ async def set_provider_bookkeeping(
             row.updated_at = now
 
 
+async def get_cost_summary(job_id: str) -> Optional[dict]:
+    """Return a compact cost + provider-instance readout for `job_id`.
+
+    None if the job doesn't exist. Always returns fresh strings for
+    the provider + instance id fields so the frontend can render a
+    uniform cloud-badge + cost cell even for local jobs (where
+    everything is zero / null / "local"). The frontend polls this on a
+    30s debounce so keeping the query cheap matters.
+    """
+    async with session() as s:
+        row = await s.get(JobRow, job_id)
+        if row is None:
+            return None
+        elapsed_s: Optional[float] = None
+        if row.claimed_at is not None:
+            terminal = row.status in ("ready", "failed", "cancelled")
+            end = row.updated_at if terminal else datetime.now(timezone.utc)
+            elapsed_s = max(0.0, (end - row.claimed_at).total_seconds())
+        return {
+            "job_id": row.id,
+            "execution_target": row.execution_target,
+            "provider_instance_id": row.provider_instance_id,
+            "cost_estimate_cents": row.provider_cost_estimate_cents or 0,
+            "cost_actual_cents": row.provider_cost_actual_cents or 0,
+            "elapsed_s": elapsed_s,
+            "status": row.status,
+        }
+
+
 async def heartbeat(job_id: str, worker_id: Optional[str] = None) -> None:
     """Bump claimed_at so the stale-claim sweep doesn't reap an active job.
 

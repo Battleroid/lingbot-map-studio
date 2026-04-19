@@ -5,7 +5,7 @@ import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import (
     FastAPI,
@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.cloud import dispatcher as cloud_dispatcher
+from app.cloud import session_creds as cloud_session_creds
 from app.cloud.broker import router as broker_router
 from app.cloud.providers import registered_ids as cloud_registered_ids
 from app.config import settings
@@ -218,20 +219,80 @@ async def list_jobs() -> list[dict[str, Any]]:
     return [r.model_dump(mode="json") for r in rows]
 
 
+def _cloud_session_id(request: Request) -> Optional[str]:
+    """Return the opaque cloud-session id the browser sends with every
+    `/api/cloud/*` request, or `None` if the header is absent. Kept as
+    a helper so the handful of endpoints that read it can stay
+    one-liners."""
+    return request.headers.get("x-cloud-session") or None
+
+
 @app.get("/api/cloud/providers")
-async def list_cloud_providers() -> dict[str, Any]:
+async def list_cloud_providers(request: Request) -> dict[str, Any]:
     """Advertise which execution targets are live in this deploy.
 
     The frontend populates its ExecutionPanel dropdown from this list —
     it avoids showing e.g. `aws-ec2` when boto3 isn't installed or no
     credentials are configured. `"local"` is always included; the fake
     provider surfaces in non-production builds for UI smoke tests.
+
+    `session_targets` lists providers whose credentials were pasted in
+    the browser for *this* session. Those aren't registered with the
+    process-wide adapter registry (because that would leak between
+    users on a shared studio instance); the dispatcher folds them in
+    at launch time via `session_creds.get_credentials`.
     """
-    ids = cloud_registered_ids()
+    session_id = _cloud_session_id(request)
     return {
-        "targets": ["local", *ids],
+        "targets": ["local", *cloud_registered_ids()],
+        "session_targets": cloud_session_creds.known_providers_for_session(session_id),
         "cost_cap_cents_default": settings.cloud_cost_cap_cents_default,
     }
+
+
+@app.post("/api/cloud/credentials/session", status_code=201)
+async def set_session_credentials(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    """Install per-session credentials for a cloud provider.
+
+    The browser calls this after the user pastes keys into
+    `CloudCredentialsDialog`. We stash the values in-process keyed by
+    an opaque session id (minted here on first use and returned in the
+    response header) and never write them to SQLite. A closed tab = a
+    forgotten secret.
+
+    Request shape:
+        { "provider": "runpod", "values": {"api_key": "..."} }
+
+    The session id the browser should store in sessionStorage comes
+    back in the `x-cloud-session` response header as well as the body.
+    """
+    provider = body.get("provider")
+    values = body.get("values") or {}
+    if not provider or not isinstance(provider, str):
+        raise HTTPException(status_code=422, detail="provider is required")
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=422, detail="values must be an object")
+    if not values:
+        raise HTTPException(status_code=422, detail="values cannot be empty")
+
+    session_id = _cloud_session_id(request) or cloud_session_creds.new_session()
+    cloud_session_creds.set_credentials(session_id, provider, {str(k): str(v) for k, v in values.items()})
+    return JSONResponse(
+        content={"provider": provider, "session_id": session_id},
+        headers={"x-cloud-session": session_id},
+        status_code=201,
+    )
+
+
+@app.delete("/api/cloud/credentials/session")
+async def clear_session_credentials(request: Request) -> dict[str, Any]:
+    """Forget every credential the current session stashed. Called on
+    the browser's explicit "log out of cloud" action. Absent-header
+    calls are a no-op (idempotent)."""
+    session_id = _cloud_session_id(request)
+    if session_id:
+        cloud_session_creds.clear_session(session_id)
+    return {"cleared": bool(session_id)}
 
 
 @app.post("/api/cloud/estimate")
@@ -274,6 +335,22 @@ async def get_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.model_dump(mode="json")
+
+
+@app.get("/api/jobs/{job_id}/cost")
+async def get_job_cost(job_id: str) -> dict[str, Any]:
+    """Cloud-cost readout for a single job.
+
+    Surfaced by `JobStatusStrip`'s provider badge on a slow poll. Reads
+    straight off the job row's bookkeeping columns — the dispatcher
+    seeds `cost_estimate_cents` at launch, a future billing sweeper
+    will fill in `cost_actual_cents`. Local jobs return zeros so the
+    UI can render a uniform shape regardless of execution target.
+    """
+    summary = await store.get_cost_summary(job_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return summary
 
 
 @app.post("/api/drafts", status_code=201)

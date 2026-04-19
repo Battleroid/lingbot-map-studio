@@ -1,24 +1,59 @@
 import type {
   AnyJobConfig,
+  ExecutionTarget,
+  InstanceSpec,
   Job,
   JobConfig,
   JobManifest,
   JobSummary,
   MeshEditRequest,
+  ProviderCostReadout,
   ReexportRequest,
 } from "./types";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
+// Opaque per-tab id the server scopes in-memory cloud credentials under.
+// Lives in sessionStorage so it dies with the tab; pasted API keys never
+// touch localStorage or SQLite. `null` while we haven't seeded one yet.
+const CLOUD_SESSION_KEY = "lingbot.cloud-session";
+
+function readCloudSession(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(CLOUD_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeCloudSession(value: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (value === null) window.sessionStorage.removeItem(CLOUD_SESSION_KEY);
+    else window.sessionStorage.setItem(CLOUD_SESSION_KEY, value);
+  } catch {
+    /* ignore quota / incognito errors */
+  }
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const cloudSession = readCloudSession();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(cloudSession ? { "x-cloud-session": cloudSession } : {}),
       ...(init?.headers || {}),
     },
   });
+  // The server rotates the cloud-session cookie-equivalent on creds posts;
+  // honour it so subsequent calls pick up the new id without a page reload.
+  const echoedSession = res.headers.get("x-cloud-session");
+  if (echoedSession && echoedSession !== cloudSession) {
+    writeCloudSession(echoedSession);
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}${body ? `: ${body}` : ""}`);
@@ -235,4 +270,62 @@ export function jobStreamUrl(jobId: string): string {
   const u = new URL(API_BASE);
   const proto = u.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${u.host}/api/jobs/${jobId}/stream`;
+}
+
+// --- Cloud (remote execution) -----------------------------------------
+
+export interface CloudProvidersResponse {
+  // Providers registered from settings + always-on (local, fake).
+  targets: ExecutionTarget[];
+  // Providers the user pasted creds for this session.
+  session_targets: string[];
+  cost_cap_cents_default: number;
+}
+
+export function listCloudProviders(): Promise<CloudProvidersResponse> {
+  return fetchJson("/api/cloud/providers");
+}
+
+export interface CostEstimateRequest {
+  execution_target: ExecutionTarget;
+  instance_spec?: InstanceSpec;
+  expected_duration_s?: number;
+}
+
+export interface CostEstimateResponse {
+  cents: number;
+  expected_duration_s: number;
+  target?: ExecutionTarget;
+}
+
+export function estimateCost(
+  req: CostEstimateRequest,
+): Promise<CostEstimateResponse> {
+  return fetchJson("/api/cloud/estimate", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function setSessionCredentials(
+  provider: string,
+  values: Record<string, string>,
+): Promise<{ provider: string; session_id: string }> {
+  return fetchJson("/api/cloud/credentials/session", {
+    method: "POST",
+    body: JSON.stringify({ provider, values }),
+  });
+}
+
+export async function clearSessionCredentials(): Promise<{ cleared: boolean }> {
+  const out = await fetchJson<{ cleared: boolean }>(
+    "/api/cloud/credentials/session",
+    { method: "DELETE" },
+  );
+  writeCloudSession(null);
+  return out;
+}
+
+export function getJobCost(jobId: string): Promise<ProviderCostReadout> {
+  return fetchJson(`/api/jobs/${jobId}/cost`);
 }

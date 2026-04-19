@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { ConfigPanel } from "@/components/ConfigPanel";
+import { ExecutionPanel } from "@/components/ExecutionPanel";
 import { GsplatConfigPanel } from "@/components/GsplatConfigPanel";
 import { JobList } from "@/components/JobList";
 import { ModePicker, type StudioMode } from "@/components/ModePicker";
@@ -21,9 +22,11 @@ import {
 import { useJobList } from "@/hooks/useJob";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_EXECUTION_FIELDS,
   DEFAULT_GSPLAT_CONFIG,
   DEFAULT_SLAM_CONFIGS,
   type AnyJobConfig,
+  type ExecutionFields,
   type GsplatConfig,
   type LingbotConfig,
   type SlamBackend,
@@ -50,6 +53,12 @@ export default function Home() {
   const [gsplatConfig, setGsplatConfig] = useState<
     Omit<GsplatConfig, "source_job_id">
   >(DEFAULT_GSPLAT_CONFIGS_DEFAULT());
+  // Execution target (local vs cloud provider) + instance spec. Shared
+  // across modes — a user toggling from lingbot → slam keeps their GPU
+  // class / spot / cost-cap choices intact.
+  const [executionFields, setExecutionFields] = useState<ExecutionFields>(
+    DEFAULT_EXECUTION_FIELDS,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -129,8 +138,9 @@ export default function Home() {
         if (!draft) {
           throw new Error("probe a clip first");
         }
-        const cfg: AnyJobConfig =
+        const baseCfg: AnyJobConfig =
           mode === "lingbot" ? effectiveLingbotConfig : currentSlamConfig;
+        const cfg = { ...baseCfg, ...executionFields } as AnyJobConfig;
         const { id } = await startJobFromDraft(draft.id, cfg);
         router.push(`/jobs/${id}`);
         return;
@@ -139,10 +149,10 @@ export default function Home() {
       if (!gsplatSourceId) {
         throw new Error("pick a source job");
       }
-      const { id } = await createGsplatJobFromSource(
-        gsplatSourceId,
-        gsplatConfig,
-      );
+      const { id } = await createGsplatJobFromSource(gsplatSourceId, {
+        ...gsplatConfig,
+        ...executionFields,
+      });
       router.push(`/jobs/${id}`);
     } catch (e) {
       setError(String((e as Error).message));
@@ -326,16 +336,24 @@ export default function Home() {
             </div>
           </div>
 
-          {mode === "lingbot" && (
-            <ConfigPanel
-              config={effectiveLingbotConfig}
+          <div style={{ display: "grid", gap: 12 }}>
+            <ExecutionPanel
+              value={executionFields}
               onChange={(patch) =>
-                setLingbotConfig({ ...effectiveLingbotConfig, ...patch })
+                setExecutionFields((prev) => ({ ...prev, ...patch }))
               }
-              readOnly={!draft}
-              title="config · lingbot"
+              readOnly={submitting}
             />
-          )}
+            {mode === "lingbot" && (
+              <ConfigPanel
+                config={effectiveLingbotConfig}
+                onChange={(patch) =>
+                  setLingbotConfig({ ...effectiveLingbotConfig, ...patch })
+                }
+                readOnly={!draft}
+                title="config · lingbot"
+              />
+            )}
           {mode === "slam" && (
             <SlamConfigPanel
               config={currentSlamConfig}
@@ -376,6 +394,7 @@ export default function Home() {
               title="config · gaussian splat"
             />
           )}
+          </div>
         </section>
 
         <JobList />

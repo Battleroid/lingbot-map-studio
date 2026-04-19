@@ -2,13 +2,17 @@
 
 import { useEffect, useState } from "react";
 
+import { getJobCost } from "@/lib/api";
 import { type JobStatusDerived, type StageState } from "@/hooks/useJobStatus";
-import type { JobStatus } from "@/lib/types";
+import type { JobStatus, ProviderCostReadout } from "@/lib/types";
 
 interface Props {
   derived: JobStatusDerived;
   jobStatus: JobStatus | undefined;
   wsStatus: "connecting" | "open" | "closed";
+  // Optional — when present, the strip polls `/api/jobs/{id}/cost` and
+  // renders a CloudCell. `null`/undefined hides the cell entirely.
+  jobId?: string;
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -286,12 +290,113 @@ function ProgressCell({
   );
 }
 
-export function JobStatusStrip({ derived, jobStatus, wsStatus }: Props) {
+function formatCents(c: number | null | undefined): string {
+  if (c === null || c === undefined) return "—";
+  if (c < 100) return `${c}¢`;
+  return `$${(c / 100).toFixed(2)}`;
+}
+
+function CloudCell({ jobId }: { jobId: string }) {
+  const [cost, setCost] = useState<ProviderCostReadout | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const res = await getJobCost(jobId);
+        if (!cancelled) {
+          setCost(res);
+          setLoading(false);
+        }
+      } catch {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void tick();
+    // Slow poll — costs don't change quickly and the badge is auxiliary.
+    const id = setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [jobId]);
+
+  if (loading && cost === null) {
+    return (
+      <div className="status-cell">
+        <span className="status-label">execution</span>
+        <div className="mono-small" style={{ color: "var(--muted)" }}>
+          loading…
+        </div>
+      </div>
+    );
+  }
+  if (cost === null) return null;
+
+  const isLocal = cost.execution_target === "local";
+  const showActual = cost.cost_actual_cents > 0;
+
+  return (
+    <div className="status-cell">
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span className="status-label">execution</span>
+        <span className="kv-row">
+          <span>
+            <b>{cost.execution_target}</b>
+          </span>
+        </span>
+      </div>
+      {!isLocal && (
+        <>
+          <div className="kv-row">
+            <span>
+              instance{" "}
+              <b title={cost.provider_instance_id ?? ""}>
+                {cost.provider_instance_id
+                  ? cost.provider_instance_id.slice(0, 12)
+                  : "—"}
+              </b>
+            </span>
+          </div>
+          <div className="kv-row">
+            <span>
+              {showActual ? "spent" : "est"}{" "}
+              <b>
+                {formatCents(
+                  showActual ? cost.cost_actual_cents : cost.cost_estimate_cents,
+                )}
+              </b>
+            </span>
+            {cost.elapsed_s !== null && (
+              <span>
+                elapsed <b>{formatDuration(cost.elapsed_s)}</b>
+              </span>
+            )}
+          </div>
+        </>
+      )}
+      {isLocal && (
+        <div className="mono-small" style={{ color: "var(--muted)" }}>
+          running in-process — no cloud cost.
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function JobStatusStrip({
+  derived,
+  jobStatus,
+  wsStatus,
+  jobId,
+}: Props) {
   return (
     <div className="status-strip">
       <StagesCell derived={derived} wsStatus={wsStatus} />
       <ProgressCell derived={derived} jobStatus={jobStatus} />
       <VramCell derived={derived} />
+      {jobId && <CloudCell jobId={jobId} />}
     </div>
   );
 }

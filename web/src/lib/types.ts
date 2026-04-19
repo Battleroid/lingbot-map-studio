@@ -33,6 +33,90 @@ export type EventStage =
 
 export type InferenceMode = "streaming" | "windowed";
 
+// Mirrors `ExecutionTarget` in worker/app/jobs/schema.py. `"local"` is the
+// existing in-process worker path; everything else is a rented cloud pod
+// launched via the dispatcher.
+export type ExecutionTarget =
+  | "local"
+  | "fake"
+  | "runpod"
+  | "runpod-serverless"
+  | "vast"
+  | "lambda_labs"
+  | "paperspace-core"
+  | "paperspace-gradient"
+  | "aws-ec2"
+  | "gcp-gce"
+  | "azure-vm";
+
+// Mirrors `InstanceSpec` in worker/app/jobs/schema.py. Kept loose on the
+// wire — providers translate it to their own API shape, the browser just
+// renders pickers + surfaces the resulting cost estimate.
+export interface InstanceSpec {
+  gpu_class: string;
+  gpu_count: number;
+  disk_gb: number;
+  spot: boolean;
+  region: string | null;
+  image: string | null;
+  env: Record<string, string>;
+}
+
+export const DEFAULT_INSTANCE_SPEC: InstanceSpec = {
+  gpu_class: "rtx4090",
+  gpu_count: 1,
+  disk_gb: 64,
+  spot: false,
+  region: null,
+  image: null,
+  env: {},
+};
+
+// Mirrors ExecutionFields on worker configs. The three cloud knobs ride
+// on every GPU-bearing processor config; lingbot / SLAM / gsplat each
+// spread this shape into their Pydantic definition.
+export interface ExecutionFields {
+  execution_target: ExecutionTarget;
+  instance_spec: InstanceSpec | null;
+  cost_cap_cents: number | null;
+}
+
+export const DEFAULT_EXECUTION_FIELDS: ExecutionFields = {
+  execution_target: "local",
+  instance_spec: null,
+  cost_cap_cents: null,
+};
+
+// Returned by GET /api/jobs/{id}/cost — polled by JobStatusStrip's
+// cloud badge when the job is running remotely.
+export interface ProviderCostReadout {
+  job_id: string;
+  execution_target: ExecutionTarget;
+  provider_instance_id: string | null;
+  cost_estimate_cents: number;
+  cost_actual_cents: number;
+  elapsed_s: number | null;
+  status: JobStatus;
+}
+
+// Shown in the ExecutionPanel dropdown — one row per GPU class the user
+// can pick from. Providers have wildly different shapes internally, but
+// the picker only needs an id + a short label + optional hint text.
+export interface GpuClassOption {
+  id: string;
+  label: string;
+  hint?: string;
+}
+
+export const GPU_CLASS_OPTIONS: GpuClassOption[] = [
+  { id: "rtx4090", label: "RTX 4090 · 24GB", hint: "Best default for SLAM + short gsplat training" },
+  { id: "rtx3090", label: "RTX 3090 · 24GB", hint: "Cheapest 24GB option on most providers" },
+  { id: "a100-40g", label: "A100 · 40GB", hint: "Use for 30k+ gsplat iters or long SLAM clips" },
+  { id: "a100-80g", label: "A100 · 80GB", hint: "Heaviest DROID-SLAM buffers / massive splats" },
+  { id: "h100", label: "H100 · 80GB", hint: "Fastest gsplat training; most expensive" },
+  { id: "l40s", label: "L40S · 48GB", hint: "Balanced gsplat workhorse" },
+];
+
 export type ProcessorId =
   | "lingbot"
   | "droid_slam"
