@@ -175,7 +175,7 @@ export default function Home() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1 className="page-title">lingbot-map studio</h1>
+        <h1 className="page-title">vid3d studio</h1>
         <span className="mono-small">
           feed-forward 3d reconstruction · slam · gaussian splat · local gpu
         </span>

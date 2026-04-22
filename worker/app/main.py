@@ -174,7 +174,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="lingbot-map studio worker", lifespan=lifespan)
+app = FastAPI(title="vid3d studio worker", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
