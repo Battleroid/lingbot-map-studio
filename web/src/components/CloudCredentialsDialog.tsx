@@ -1,6 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 
 import { setSessionCredentials } from "@/lib/api";
 import type { ExecutionTarget } from "@/lib/types";
@@ -58,6 +65,22 @@ const PROVIDER_FIELDS: Record<string, { key: string; label: string; type: "text"
   ],
 };
 
+// Comfortable padded inputs — avoids the 90px .stat clamp and the
+// default 12px panel font size so long keys are readable as pasted.
+const INPUT_STYLE: CSSProperties = {
+  width: "100%",
+  padding: "8px 10px",
+  fontSize: "var(--fs-sm)",
+  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+  boxSizing: "border-box",
+};
+
+const TEXTAREA_STYLE: CSSProperties = {
+  ...INPUT_STYLE,
+  resize: "vertical",
+  minHeight: 120,
+};
+
 export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
   const fields = useMemo(() => PROVIDER_FIELDS[provider] ?? [], [provider]);
   const [values, setValues] = useState<Record<string, string>>(() =>
@@ -65,6 +88,10 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Portal target is only available after mount — before that, render
+  // nothing so SSR/hydration stays consistent.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   async function save() {
     setSaving(true);
@@ -84,47 +111,44 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
     }
   }
 
-  if (fields.length === 0) {
-    return (
-      <div className="modal-backdrop" onClick={onClose}>
-        <div
-          className="panel"
-          style={{ maxWidth: 420, margin: "auto", marginTop: 120 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="panel-header">
-            <span>credentials for {provider}</span>
-          </div>
-          <div className="panel-body" style={{ display: "grid", gap: 8 }}>
-            <span className="mono-small">
-              no credential schema wired up for this provider. paste values
-              via the studio env or extend PROVIDER_FIELDS.
-            </span>
-            <button type="button" onClick={onClose}>
-              close
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (!mounted) return null;
 
-  return (
-    <div
-      className="modal-backdrop"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.45)",
-        display: "grid",
-        placeItems: "center",
-        zIndex: 100,
-      }}
-    >
+  const backdropStyle: CSSProperties = {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.45)",
+    display: "grid",
+    placeItems: "center",
+    zIndex: 100,
+  };
+
+  let body: ReactNode;
+  if (fields.length === 0) {
+    body = (
       <div
         className="panel"
         style={{ minWidth: 380, maxWidth: 520 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="panel-header">
+          <span>credentials for {provider}</span>
+        </div>
+        <div className="panel-body" style={{ display: "grid", gap: 8 }}>
+          <span className="mono-small">
+            no credential schema wired up for this provider. paste values
+            via the studio env or extend PROVIDER_FIELDS.
+          </span>
+          <button type="button" onClick={onClose}>
+            close
+          </button>
+        </div>
+      </div>
+    );
+  } else {
+    body = (
+      <div
+        className="panel"
+        style={{ minWidth: 440, maxWidth: 640, width: "min(640px, 92vw)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="panel-header">
@@ -137,19 +161,23 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
             ×
           </button>
         </div>
-        <div className="panel-body" style={{ display: "grid", gap: 8 }}>
+        <div className="panel-body" style={{ display: "grid", gap: 12 }}>
           <div className="mono-small" style={{ opacity: 0.8 }}>
             pasted here = stored in memory only, scoped to this browser
             tab. closes with the tab, never written to disk.
           </div>
           {fields.map((f) => (
-            <label key={f.key} className="stat" style={{ display: "grid", gap: 4 }}>
+            <label
+              key={f.key}
+              style={{ display: "grid", gap: 4, width: "100%" }}
+            >
               <span>{f.label}</span>
               {f.type === "textarea" ? (
                 <textarea
                   rows={6}
                   value={values[f.key] ?? ""}
                   placeholder={f.placeholder}
+                  style={TEXTAREA_STYLE}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, [f.key]: e.target.value }))
                   }
@@ -161,6 +189,7 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
                   placeholder={f.placeholder}
                   autoComplete="off"
                   spellCheck={false}
+                  style={INPUT_STYLE}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, [f.key]: e.target.value }))
                   }
@@ -189,6 +218,13 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
           </div>
         </div>
       </div>
-    </div>
+    );
+  }
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose} style={backdropStyle}>
+      {body}
+    </div>,
+    document.body,
   );
 }
