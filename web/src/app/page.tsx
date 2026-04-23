@@ -8,6 +8,7 @@ import { ExecutionPanel } from "@/components/ExecutionPanel";
 import { GsplatConfigPanel } from "@/components/GsplatConfigPanel";
 import { JobList } from "@/components/JobList";
 import { ModePicker, type StudioMode } from "@/components/ModePicker";
+import { MonogsConfigPanel } from "@/components/MonogsConfigPanel";
 import { PreprocPreview } from "@/components/PreprocPreview";
 import { ProbePanel } from "@/components/ProbePanel";
 import { SlamConfigPanel } from "@/components/SlamConfigPanel";
@@ -24,11 +25,14 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_EXECUTION_FIELDS,
   DEFAULT_GSPLAT_CONFIG,
+  DEFAULT_MONOGS_CONFIG,
   DEFAULT_SLAM_CONFIGS,
   type AnyJobConfig,
   type ExecutionFields,
+  type GsplatBackend,
   type GsplatConfig,
   type LingbotConfig,
+  type MonogsConfig,
   type SlamBackend,
   type SlamConfig,
 } from "@/lib/types";
@@ -39,6 +43,7 @@ export default function Home() {
 
   const [mode, setMode] = useState<StudioMode>("lingbot");
   const [slamBackend, setSlamBackend] = useState<SlamBackend>("mast3r_slam");
+  const [gsplatBackend, setGsplatBackend] = useState<GsplatBackend>("gsplat");
   const [gsplatSourceId, setGsplatSourceId] = useState<string | null>(null);
 
   const [files, setFiles] = useState<File[]>([]);
@@ -53,6 +58,9 @@ export default function Home() {
   const [gsplatConfig, setGsplatConfig] = useState<
     Omit<GsplatConfig, "source_job_id">
   >(DEFAULT_GSPLAT_CONFIGS_DEFAULT());
+  const [monogsConfig, setMonogsConfig] = useState<MonogsConfig>(
+    DEFAULT_MONOGS_CONFIG,
+  );
   // Execution target (local vs cloud provider) + instance spec. Shared
   // across modes — a user toggling from lingbot → slam keeps their GPU
   // class / spot / cost-cap choices intact.
@@ -62,7 +70,13 @@ export default function Home() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const requiresUpload = mode === "lingbot" || mode === "slam";
+  // Modes that consume uploaded footage. MonoGS lives under the gsplat
+  // tab but requires an upload like SLAM/lingbot; plain gsplat training
+  // chains off a completed source job and skips the upload step.
+  const requiresUpload =
+    mode === "lingbot" ||
+    mode === "slam" ||
+    (mode === "gsplat" && gsplatBackend === "monogs");
   const canProbe =
     requiresUpload && files.length > 0 && !uploading && !draft;
 
@@ -72,17 +86,6 @@ export default function Home() {
     if (!draft) return lingbotConfig;
     return { ...DEFAULT_CONFIG, ...draft.suggested_config, ...lingbotConfig };
   }, [draft, lingbotConfig]);
-
-  const effectiveConfig: AnyJobConfig =
-    mode === "lingbot"
-      ? effectiveLingbotConfig
-      : mode === "slam"
-        ? currentSlamConfig
-        : {
-            ...gsplatConfig,
-            processor: "gsplat",
-            source_job_id: gsplatSourceId ?? "",
-          };
 
   async function runProbe() {
     setError(null);
@@ -130,6 +133,20 @@ export default function Home() {
     setError(null);
   }
 
+  function changeGsplatBackend(next: GsplatBackend) {
+    if (next === gsplatBackend) return;
+    // Discard any draft when switching between the source-job flow and
+    // the upload flow — they have incompatible prerequisites.
+    if (draft) {
+      deleteDraft(draft.id).catch(() => undefined);
+    }
+    setGsplatBackend(next);
+    setDraft(null);
+    setFiles([]);
+    setUploadPct(0);
+    setError(null);
+  }
+
   async function start() {
     setSubmitting(true);
     setError(null);
@@ -145,7 +162,18 @@ export default function Home() {
         router.push(`/jobs/${id}`);
         return;
       }
-      // gsplat: no upload, chain off a source job.
+      // gsplat tab:
+      //   - backend "monogs" → upload + probe, start like SLAM does
+      //   - backend "gsplat" → chain off a completed source job
+      if (gsplatBackend === "monogs") {
+        if (!draft) {
+          throw new Error("probe a clip first");
+        }
+        const cfg = { ...monogsConfig, ...executionFields } as AnyJobConfig;
+        const { id } = await startJobFromDraft(draft.id, cfg);
+        router.push(`/jobs/${id}`);
+        return;
+      }
       if (!gsplatSourceId) {
         throw new Error("pick a source job");
       }
@@ -163,14 +191,16 @@ export default function Home() {
   const startDisabled =
     submitting ||
     (requiresUpload && !draft) ||
-    (mode === "gsplat" && !gsplatSourceId);
+    (mode === "gsplat" && gsplatBackend === "gsplat" && !gsplatSourceId);
 
   const startLabel =
     mode === "lingbot"
       ? "start reconstruction"
       : mode === "slam"
         ? `start ${slamBackend.replace("_", " ")}`
-        : "train gaussian splat";
+        : gsplatBackend === "monogs"
+          ? "start monogs splat"
+          : "train gaussian splat";
 
   return (
     <div className="app-shell">
@@ -188,6 +218,8 @@ export default function Home() {
               onMode={changeMode}
               slamBackend={slamBackend}
               onSlamBackend={setSlamBackend}
+              gsplatBackend={gsplatBackend}
+              onGsplatBackend={changeGsplatBackend}
               gsplatSourceId={gsplatSourceId}
               onGsplatSource={setGsplatSourceId}
               sourceJobs={allJobs}
@@ -197,7 +229,7 @@ export default function Home() {
             <div className="panel">
               <div className="panel-header">
                 <span>
-                  {mode === "gsplat"
+                  {mode === "gsplat" && gsplatBackend === "gsplat"
                     ? "1 · pick source · 2 · review + start"
                     : draft
                       ? "2 · review + start"
@@ -297,7 +329,7 @@ export default function Home() {
                   </>
                 )}
 
-                {mode === "gsplat" && (
+                {mode === "gsplat" && gsplatBackend === "gsplat" && (
                   <>
                     <div className="mono-small" style={{ opacity: 0.8 }}>
                       gsplat training runs on the gs worker container and
@@ -354,46 +386,56 @@ export default function Home() {
                 title="config · lingbot"
               />
             )}
-          {mode === "slam" && (
-            <SlamConfigPanel
-              config={currentSlamConfig}
-              onChange={(patch) =>
-                setSlamConfigs((prev) => ({
-                  ...prev,
-                  [slamBackend]: {
-                    ...prev[slamBackend],
-                    ...patch,
-                  } as SlamConfig,
-                }))
-              }
-              readOnly={!draft}
-              title={`config · ${slamBackend.replace("_", " ")}`}
-            />
-          )}
-          {mode === "gsplat" && (
-            <GsplatConfigPanel
-              config={
-                {
-                  ...gsplatConfig,
-                  processor: "gsplat",
-                  source_job_id: gsplatSourceId ?? "",
-                } as GsplatConfig
-              }
-              onChange={(patch) => {
-                // Strip the read-only fields the panel includes for display.
-                const {
-                  processor: _p,
-                  source_job_id: _s,
-                  ...rest
-                } = patch as Partial<GsplatConfig>;
-                void _p;
-                void _s;
-                setGsplatConfig((prev) => ({ ...prev, ...rest }));
-              }}
-              readOnly={!gsplatSourceId}
-              title="config · gaussian splat"
-            />
-          )}
+            {mode === "slam" && (
+              <SlamConfigPanel
+                config={currentSlamConfig}
+                onChange={(patch) =>
+                  setSlamConfigs((prev) => ({
+                    ...prev,
+                    [slamBackend]: {
+                      ...prev[slamBackend],
+                      ...patch,
+                    } as SlamConfig,
+                  }))
+                }
+                readOnly={!draft}
+                title={`config · ${slamBackend.replace("_", " ")}`}
+              />
+            )}
+            {mode === "gsplat" && gsplatBackend === "gsplat" && (
+              <GsplatConfigPanel
+                config={
+                  {
+                    ...gsplatConfig,
+                    processor: "gsplat",
+                    source_job_id: gsplatSourceId ?? "",
+                  } as GsplatConfig
+                }
+                onChange={(patch) => {
+                  // Strip the read-only fields the panel includes for display.
+                  const {
+                    processor: _p,
+                    source_job_id: _s,
+                    ...rest
+                  } = patch as Partial<GsplatConfig>;
+                  void _p;
+                  void _s;
+                  setGsplatConfig((prev) => ({ ...prev, ...rest }));
+                }}
+                readOnly={!gsplatSourceId}
+                title="config · gaussian splat"
+              />
+            )}
+            {mode === "gsplat" && gsplatBackend === "monogs" && (
+              <MonogsConfigPanel
+                config={monogsConfig}
+                onChange={(patch) =>
+                  setMonogsConfig((prev) => ({ ...prev, ...patch }))
+                }
+                readOnly={!draft}
+                title="config · monogs"
+              />
+            )}
           </div>
         </section>
 

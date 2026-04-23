@@ -1,12 +1,15 @@
 """MonoGS / Photo-SLAM backend.
 
-Emits a 3D Gaussian Splat scene incrementally as it tracks. Short-circuits
-Phase 5: a user who picks MonoGS gets a splat directly out of SLAM and
-doesn't need a follow-on gsplat training job.
+Emits a 3D Gaussian Splat scene incrementally as it tracks uploaded
+footage, end-to-end in a single job. Lives under the Gaussian Splat tab
+as an alternate backend to `gsplat.trainer` — same output artifact
+(`splat.ply`), different input shape: MonoGS starts from raw frames,
+gsplat trains off a completed SLAM/Lingbot source job.
 
-Until upstream MonoGS is installed in `worker-slam` we fall back to the
-simulated session and synthesise a tiny splat PLY from its point cloud so
-the downstream splat tools have something to exercise.
+Runs in the `worker-gs` container alongside `gsplat.trainer` so they
+share CUDA/torch matrices. Until upstream MonoGS is installed we fall
+back to the simulated tracker + synthesise a tiny splat PLY from its
+point cloud so the downstream splat tools have something to exercise.
 """
 
 from __future__ import annotations

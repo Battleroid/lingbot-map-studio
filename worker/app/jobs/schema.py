@@ -41,7 +41,7 @@ ProcessorId = Literal[
     "monogs",
     "gsplat",
 ]
-SlamBackend = Literal["droid_slam", "mast3r_slam", "dpvo", "monogs"]
+SlamBackend = Literal["droid_slam", "mast3r_slam", "dpvo"]
 ProcessorKind = Literal["reconstruction", "slam", "gsplat"]
 
 # Widened to cover all future modes. Artifact.kind is free-form string in
@@ -328,9 +328,19 @@ class DpvoConfig(_SlamConfigBase):
 
 class MonogsConfig(_SlamConfigBase):
     """MonoGS (Photo-SLAM variant). Gaussian-splat SLAM — emits a splat
-    scene incrementally. Short-circuits Phase 5: if a user picks MonoGS
-    they get a splat out of SLAM directly; the downstream gsplat training
-    job becomes optional."""
+    scene incrementally from raw footage.
+
+    User-facing, MonoGS lives under the Gaussian Splat tab as an alternate
+    "training backend" to `gsplat` (trainer.py). The gsplat backend trains
+    off a completed SLAM/Lingbot job; MonoGS trains directly off uploaded
+    frames. Both end in the same splat artifact, so the viewer and splat
+    tool panel treat their outputs identically.
+
+    Structurally MonoGS is still a SLAM-shaped session (tracking + keyframe
+    loop), which is why this config keeps `_SlamConfigBase` for the
+    tracking knobs; it's just routed to the `gs` worker container and
+    surfaced in the UI as a gsplat backend.
+    """
 
     processor: Literal["monogs"] = "monogs"
     # Refinement iterations after each keyframe is added to the splat.
@@ -343,10 +353,9 @@ class MonogsConfig(_SlamConfigBase):
 
 # Keep the old name as a type alias so existing code (ingest.py, preproc.py)
 # that typed against SlamConfig continues to work. New code should reference
-# the specific per-backend class or _SlamConfigBase.
-SlamConfig = (
-    DroidSlamConfig | Mast3rSlamConfig | DpvoConfig | MonogsConfig
-)
+# the specific per-backend class or _SlamConfigBase. MonoGS is deliberately
+# *not* in this union — it ships under the gsplat tab now.
+SlamConfig = DroidSlamConfig | Mast3rSlamConfig | DpvoConfig
 
 
 class GsplatConfig(ExecutionFields):
@@ -439,11 +448,17 @@ def dump_job_config(cfg: AnyJobConfig) -> str:
 
 
 def processor_kind(cfg: AnyJobConfig) -> ProcessorKind:
-    """Group the specific processor id into its broader kind for UI wiring."""
+    """Group the specific processor id into its broader kind for UI wiring.
+
+    MonoGS is tracked-shaped under the hood but presented to users as a
+    gsplat backend (it produces a splat artifact and lives on the Gaussian
+    Splat tab), so it maps to `"gsplat"` here — the tools panel keys off
+    this return value to pick between mesh/slam/splat UIs.
+    """
     pid = cfg.processor
     if pid == "lingbot":
         return "reconstruction"
-    if pid == "gsplat":
+    if pid in ("gsplat", "monogs"):
         return "gsplat"
     return "slam"
 
