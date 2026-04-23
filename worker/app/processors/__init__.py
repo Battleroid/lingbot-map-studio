@@ -35,7 +35,11 @@ WORKER_CLASSES: dict[str, str] = {
     "droid_slam": "slam",
     "mast3r_slam": "slam",
     "dpvo": "slam",
-    "monogs": "slam",
+    # MonoGS is a gsplat backend user-facing — runs in the gs worker
+    # image alongside the gsplat trainer. The session itself is still
+    # SLAM-shaped (tracking + keyframe loop), but its output is a splat
+    # and it shares the gs container with `trainer.py`.
+    "monogs": "gs",
     "gsplat": "gs",
 }
 
@@ -48,7 +52,7 @@ _MODULE_PATHS: dict[str, tuple[str, str]] = {
     "droid_slam": ("app.processors.slam.droid_slam", "DroidSlamProcessor"),
     "mast3r_slam": ("app.processors.slam.mast3r_slam", "Mast3rSlamProcessor"),
     "dpvo": ("app.processors.slam.dpvo", "DpvoProcessor"),
-    "monogs": ("app.processors.slam.monogs", "MonogsProcessor"),
+    "monogs": ("app.processors.gsplat.monogs", "MonogsProcessor"),
     "gsplat": ("app.processors.gsplat.trainer", "GsplatProcessor"),
 }
 

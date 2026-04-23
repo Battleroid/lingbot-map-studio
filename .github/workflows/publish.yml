@@ -1,8 +1,18 @@
 name: publish
 
+# Publish only fires after ci.yml has finished successfully for the
+# same commit. This gates Docker image publishing on a green test suite
+# — a bad commit to main can't end up as an image you'd immediately
+# `docker pull`. Tag pushes + manual dispatches skip the gate
+# (workflow_run only triggers on the source workflow's completion, so
+# the `push: tags` trigger is still available for cutting a versioned
+# build on demand).
 on:
-  push:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
     branches: [main]
+  push:
     tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
@@ -31,10 +41,20 @@ jobs:
     name: build base image
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Workflow_run fires on every CI completion (pass + fail); this skips
+    # the build when CI was red. Tag pushes + manual dispatches bypass
+    # because they don't come through workflow_run.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     outputs:
       base_ref: ${{ steps.base_ref.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pin to the exact commit CI tested so workflow_run-triggered
+          # builds don't drift if main moved forward while CI was running.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
@@ -98,6 +118,10 @@ jobs:
     needs: base
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # `needs: base` already skips if base skipped, but belt-and-braces.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +138,8 @@ jobs:
             dockerfile: worker/Dockerfile.remote
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: free disk space
         uses: jlumbroso/free-disk-space@main
@@ -171,8 +197,13 @@ jobs:
     name: build web
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: set lowercase image base
         id: img

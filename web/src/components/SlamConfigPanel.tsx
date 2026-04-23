@@ -5,7 +5,6 @@ import {
   type DpvoConfig,
   type DroidSlamConfig,
   type Mast3rSlamConfig,
-  type MonogsConfig,
   PREPROC_PRESETS,
   type PreprocFields,
   type SlamConfig,
@@ -53,10 +52,6 @@ const TIPS: Record<string, string> = {
     "DPVO patches per frame. 96 default. More = denser tracks = higher accuracy at higher VRAM/CPU cost.",
   buffer_keyframes:
     "DPVO patch buffer cap. Larger = more history in local BA, but more memory.",
-  refine_iters:
-    "MonoGS/Photo-SLAM refinement iterations per keyframe. Drives how aggressively the on-the-fly splat is fit.",
-  prune_opacity:
-    "MonoGS/Photo-SLAM: drop gaussians whose opacity falls below this value during training. Keeps the splat lean.",
   vram_soft_limit_gb:
     "Abort the job cleanly if allocated VRAM crosses this threshold. Leave blank to use the worker default (22 GB on a 24 GB card).",
 };
@@ -140,9 +135,6 @@ function isMast3r(c: SlamConfig): c is Mast3rSlamConfig {
 }
 function isDpvo(c: SlamConfig): c is DpvoConfig {
   return c.processor === "dpvo";
-}
-function isMonogs(c: SlamConfig): c is MonogsConfig {
-  return c.processor === "monogs";
 }
 
 export function SlamConfigPanel({
@@ -460,38 +452,6 @@ export function SlamConfigPanel({
                 onChange({
                   buffer_keyframes: (v ?? 2048) as number,
                 } as Partial<DpvoConfig>)
-              }
-            />
-          </>
-        )}
-        {isMonogs(config) && (
-          <>
-            <NumberRow
-              label="refine iters/kf"
-              tipKey="refine_iters"
-              value={config.refine_iters}
-              step={5}
-              min={1}
-              max={500}
-              readOnly={readOnly}
-              onChange={(v) =>
-                onChange({
-                  refine_iters: (v ?? 50) as number,
-                } as Partial<MonogsConfig>)
-              }
-            />
-            <NumberRow
-              label="prune opacity"
-              tipKey="prune_opacity"
-              value={config.prune_opacity}
-              step={0.001}
-              min={0}
-              max={0.5}
-              readOnly={readOnly}
-              onChange={(v) =>
-                onChange({
-                  prune_opacity: (v ?? 0.005) as number,
-                } as Partial<MonogsConfig>)
               }
             />
           </>

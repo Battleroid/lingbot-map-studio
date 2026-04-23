@@ -40,11 +40,14 @@ def test_every_processor_has_a_worker_class():
         "gsplat",
     }
     assert set(WORKER_CLASSES.keys()) == expected_ids
-    # Lingbot → its own container; all four SLAM backends → slam; gsplat → gs.
+    # Lingbot → its own container; the three tracking SLAM backends → slam;
+    # gsplat + MonoGS both → gs (MonoGS is now a gsplat-tab backend that
+    # shares the gs container with the trainer).
     assert WORKER_CLASSES["lingbot"] == "lingbot"
-    for sid in ("droid_slam", "mast3r_slam", "dpvo", "monogs"):
+    for sid in ("droid_slam", "mast3r_slam", "dpvo"):
         assert WORKER_CLASSES[sid] == "slam"
     assert WORKER_CLASSES["gsplat"] == "gs"
+    assert WORKER_CLASSES["monogs"] == "gs"
 
 
 def test_processor_kind_grouping():
@@ -62,7 +65,8 @@ def test_processor_kind_grouping():
     assert processor_kind(DroidSlamConfig()) == "slam"
     assert processor_kind(Mast3rSlamConfig()) == "slam"
     assert processor_kind(DpvoConfig()) == "slam"
-    assert processor_kind(MonogsConfig()) == "slam"
+    # MonoGS is UI-wise a gsplat backend; tools panel keys off this.
+    assert processor_kind(MonogsConfig()) == "gsplat"
     assert processor_kind(GsplatConfig(source_job_id="abc")) == "gsplat"
 
 

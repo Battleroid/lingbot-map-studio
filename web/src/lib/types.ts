@@ -125,7 +125,16 @@ export type ProcessorId =
   | "monogs"
   | "gsplat";
 
-export type SlamBackend = "droid_slam" | "mast3r_slam" | "dpvo" | "monogs";
+// Pure tracking SLAM backends. MonoGS used to live here; it's now a
+// Gaussian-Splat backend (see `GsplatBackend`) because it emits a splat
+// directly from raw footage and nothing else on the SLAM/Lingbot tab
+// consumed its splat output.
+export type SlamBackend = "droid_slam" | "mast3r_slam" | "dpvo";
+
+// Gaussian-Splat tab backends. `gsplat` trains off a completed source
+// job (SLAM or Lingbot); `monogs` takes raw footage and emits a splat
+// directly. Both produce a `splat.ply` and share the splat viewer + tools.
+export type GsplatBackend = "gsplat" | "monogs";
 
 export type ProcessorKind = "reconstruction" | "slam" | "gsplat";
 
@@ -226,6 +235,10 @@ export interface DpvoConfig extends SlamConfigBase {
   buffer_keyframes: number;
 }
 
+// MonoGS: still structurally a SLAM-shaped config (it inherits the
+// tracking knobs because the session is a SLAM loop under the hood),
+// but UI-wise it's a gsplat backend. Not a member of `SlamConfig` —
+// it's surfaced via `AnyGsplatConfig` below.
 export interface MonogsConfig extends SlamConfigBase {
   processor: "monogs";
   refine_iters: number;
@@ -235,8 +248,7 @@ export interface MonogsConfig extends SlamConfigBase {
 export type SlamConfig =
   | DroidSlamConfig
   | Mast3rSlamConfig
-  | DpvoConfig
-  | MonogsConfig;
+  | DpvoConfig;
 
 // Gaussian-splat training config. Mirrors worker/app/jobs/schema.py.
 export interface GsplatConfig {
@@ -276,7 +288,15 @@ export const DEFAULT_GSPLAT_CONFIG: Omit<GsplatConfig, "source_job_id"> = {
   vram_soft_limit_gb: null,
 };
 
-export type AnyJobConfig = LingbotConfig | SlamConfig | GsplatConfig;
+// Union of the two Gaussian-Splat tab backends. Frontend UIs that take
+// "whatever the user picked on the splat page" narrow over this.
+export type AnyGsplatConfig = GsplatConfig | MonogsConfig;
+
+export type AnyJobConfig =
+  | LingbotConfig
+  | SlamConfig
+  | GsplatConfig
+  | MonogsConfig;
 
 // Back-compat alias: most existing UI code only knows the lingbot shape.
 // Phase 6 migrates those call sites to be mode-aware.
@@ -384,8 +404,7 @@ export function isSlamConfig(c: AnyJobConfig): c is SlamConfig {
   return (
     c.processor === "droid_slam" ||
     c.processor === "mast3r_slam" ||
-    c.processor === "dpvo" ||
-    c.processor === "monogs"
+    c.processor === "dpvo"
   );
 }
 
@@ -393,9 +412,19 @@ export function isGsplatConfig(c: AnyJobConfig): c is GsplatConfig {
   return c.processor === "gsplat";
 }
 
+export function isMonogsConfig(c: AnyJobConfig): c is MonogsConfig {
+  return c.processor === "monogs";
+}
+
+export function isAnyGsplatConfig(c: AnyJobConfig): c is AnyGsplatConfig {
+  return isGsplatConfig(c) || isMonogsConfig(c);
+}
+
 export function processorKind(c: AnyJobConfig): ProcessorKind {
   if (isLingbotConfig(c)) return "reconstruction";
-  if (isGsplatConfig(c)) return "gsplat";
+  // MonoGS is a gsplat backend user-facing even though it's structurally
+  // a SLAM session under the hood.
+  if (isAnyGsplatConfig(c)) return "gsplat";
   return "slam";
 }
 
@@ -554,7 +583,6 @@ export const DEFAULT_SLAM_CONFIGS: {
   droid_slam: DroidSlamConfig;
   mast3r_slam: Mast3rSlamConfig;
   dpvo: DpvoConfig;
-  monogs: MonogsConfig;
 } = {
   droid_slam: {
     ..._slamBaseDefaults,
@@ -575,13 +603,17 @@ export const DEFAULT_SLAM_CONFIGS: {
     patch_per_frame: 96,
     buffer_keyframes: 2048,
   },
-  monogs: {
-    ..._slamBaseDefaults,
-    processor: "monogs",
-    refine_iters: 50,
-    prune_opacity: 0.005,
-    run_poisson_mesh: false,
-  },
+};
+
+// MonoGS default. Lives under the gsplat tab (see `GsplatBackend`) but
+// keeps the SLAM base defaults because the session itself is SLAM-shaped
+// (tracking + keyframe loop).
+export const DEFAULT_MONOGS_CONFIG: MonogsConfig = {
+  ..._slamBaseDefaults,
+  processor: "monogs",
+  refine_iters: 50,
+  prune_opacity: 0.005,
+  run_poisson_mesh: false,
 };
 
 // FPV preprocessing presets. Applied on top of the currently-selected base
