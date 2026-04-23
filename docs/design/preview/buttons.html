@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Button States</title>
+<link rel="stylesheet" href="_frame.css">
+<style>
+  .btn-cell { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+  .btn-cell .btn { width: 100%; padding: 6px 12px; position: relative; }
+
+  /* HOVER — keep the button on a light dithered/hatch fill + thick inset rule.
+     Reads as "targetable" without being committed (inverted) like pressed. */
+  .btn-cell .btn.hover {
+    background-color: #ffffff;
+    background-image:
+      repeating-linear-gradient(-45deg,
+        #000 0, #000 1px,
+        transparent 1px, transparent 5px);
+    color: #000;
+    box-shadow: inset 0 0 0 2px #000;
+    outline: 1px solid #000;
+    outline-offset: 2px;
+  }
+
+  /* PRESSED — fully inverted; the "committed / held" state. */
+  .btn-cell .btn[data-pressed="true"] {
+    background: #000;
+    color: #fff;
+    box-shadow: inset 2px 2px 0 #3a3a3a;
+  }
+
+  .btn-cell .btn.disabled {
+    color: #9a9a9a;
+    border: 1px dashed #9a9a9a;
+    background:
+      repeating-linear-gradient(135deg, #ffffff 0 4px, #ededed 4px 8px);
+    cursor: not-allowed;
+  }
+  .btn-tag { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .btn-desc { font-size: 11px; color: var(--muted); line-height: 1.35; }
+</style>
+</head>
+<body><div class="card">
+  <div class="section-title" style="margin-bottom:10px">button · 4 states — distinct on glance</div>
+  <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px 10px">
+
+    <div class="btn-cell">
+      <span class="btn-tag">resting</span>
+      <button class="btn">start slam</button>
+      <span class="btn-desc">white fill · 1px solid · fg text</span>
+    </div>
+
+    <div class="btn-cell">
+      <span class="btn-tag">hover</span>
+      <button class="btn hover">start slam</button>
+      <span class="btn-desc">thin diagonal hatch · 2px inset rule · offset outline</span>
+    </div>
+
+    <div class="btn-cell">
+      <span class="btn-tag">pressed</span>
+      <button class="btn" data-pressed="true">start slam</button>
+      <span class="btn-desc">inverted · inset bevel shadow (committed / held)</span>
+    </div>
+
+    <div class="btn-cell">
+      <span class="btn-tag">disabled</span>
+      <button class="btn disabled">start slam</button>
+      <span class="btn-desc">dashed rule · muted text · diagonal hatch fill</span>
+    </div>
+
+  </div>
+  <hr class="rule">
+  <div class="mono-small">no color-coded variants · primary = longer label · destructive = confirm() dialog, not a red button</div>
+</div></body></html>

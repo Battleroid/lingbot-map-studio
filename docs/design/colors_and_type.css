@@ -1,0 +1,148 @@
+/* vid3d Studio — Colors & Type
+   ==============================
+   Monospace, grayscale, utilitarian. The whole UI lives on a 4-value
+   palette (bg, fg, soft, muted) plus one blood-red "danger". A dithered
+   gray background (classic Mac Finder / Win 3.1 50% dither) separates
+   panels; chrome is never colored.
+
+   Every size/weight is built on a narrow monospace ladder: 11px / 12px /
+   13px / 16px. Body text is 12px. Nothing gets smaller than 11px; nothing
+   gets bigger than 16px in chrome. Numbers use tabular figures.
+*/
+
+/* ─── Fonts ────────────────────────────────────────────────────────── */
+/* Commit Mono — SIL OFL, shipped with the app as the free fallback for
+   Berkeley Mono. Use this everywhere unless the licensed Berkeley Mono
+   woff2 is installed (then it takes precedence via font stack).
+*/
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-400.woff2") format("woff2");
+  font-weight: 100 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-700.woff2") format("woff2");
+  font-weight: 501 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-400-italic.woff2") format("woff2");
+  font-weight: 100 500;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Commit Mono";
+  src: url("./fonts/commit-mono-700-italic.woff2") format("woff2");
+  font-weight: 501 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  /* ─── Palette ──────────────────────────────────────────────────── */
+  /* Core four. Everything else in the UI derives from these. */
+  --bg:      #ffffff;   /* page + panel background */
+  --fg:      #000000;   /* body text, rules, inverted header fill */
+  --soft:    #f4f4f4;   /* subtle fill: progress tracks, queued chips */
+  --soft-2:  #e8e8e8;   /* slightly heavier than soft — log-fresh flash */
+  --muted:   #5c5c5c;   /* secondary text, pending stages, tip labels */
+  --rule:    #000000;   /* 1px borders — ALWAYS the same as fg */
+
+  /* The only hues in the palette. Used sparingly: failed jobs, vram limit
+     marker, error copy (danger); ready/completed jobs, finished stages,
+     success confirmations (ok). Do not introduce additional hues — all
+     other status is communicated by shape + placement + the chip colour map. */
+  --danger:  #8a0000;
+  --ok:      #2b5a2b;   /* deep forest — completed / ready / success */
+
+  /* Dither tones — classic 50% 2x2 checker. Rendered inline-SVG so it
+     stays crisp on retina (shape-rendering: crispEdges). */
+  --dither-base:    #e8e8e8;
+  --dither-ink:     #c0c0c0;
+  --dither-base-2:  #f0f0f0;
+  --dither-ink-2:   #d0d0d0;
+
+  /* ─── Type scale ───────────────────────────────────────────────── */
+  --fs-xs: 11px;  /* chips, tips, labels, meta */
+  --fs-sm: 12px;  /* body — the default */
+  --fs-md: 13px;  /* config rows when compactness isn't needed */
+  --fs-lg: 16px;  /* page title, bignum secondary */
+  --fs-xl: 22px;  /* bignum progress counter */
+  --lh:    1.4;   /* prose */
+  --lh-tight: 1.2; /* controls, chips */
+
+  /* ─── Spacing ──────────────────────────────────────────────────── */
+  --pad:    10px;  /* panel body padding */
+  --pad-sm: 6px;   /* dense panel padding */
+  --gap:    8px;   /* inline flex gap */
+  --gap-lg: 12px;  /* panel stack gap */
+
+  /* ─── Font stack ───────────────────────────────────────────────── */
+  /* Berkeley Mono (licensed, optional) ▸ Commit Mono (bundled) ▸
+     Roboto Mono (next/font fallback) ▸ system monos. */
+  --font-mono: "Berkeley Mono", "Commit Mono", "Roboto Mono", ui-monospace,
+               "SFMono-Regular", Consolas, Menlo, monospace;
+
+  /* ─── Semantic text tokens ─────────────────────────────────────── */
+  --page-title-size: var(--fs-lg);
+  --page-title-tracking: 0.10em;
+  --section-title-size: var(--fs-xs);
+  --section-title-tracking: 0.10em;
+  --chip-tracking: 0.04em;
+  --header-tracking: 0.08em;
+}
+
+/* ─── Base ──────────────────────────────────────────────────────── */
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh);
+  font-feature-settings: "ss01", "ss02", "cv02";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Semantic blocks ──────────────────────────────────────────── */
+.page-title {
+  font-size: var(--page-title-size);
+  letter-spacing: var(--page-title-tracking);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.section-title {
+  font-size: var(--section-title-size);
+  letter-spacing: var(--section-title-tracking);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mono-small {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.panel-header {
+  text-transform: uppercase;
+  letter-spacing: var(--header-tracking);
+  font-size: var(--fs-xs);
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* ─── Dither backgrounds ───────────────────────────────────────── */
+/* Use on: .app-main, .job-side, .status-cell — anywhere the page
+   needs to recede behind crisp white panels. */
+.dithered {
+  background-color: var(--dither-base);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
+  background-size: 4px 4px;
+  image-rendering: pixelated;
+}

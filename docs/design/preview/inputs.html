@@ -1,0 +1,87 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Form Inputs</title>
+<link rel="stylesheet" href="_frame.css">
+<style>
+  .inp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+  .inp-row { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .inp-label { font-size: 11px; color: var(--muted); text-transform: lowercase; letter-spacing: 0.04em; }
+  .inp-row input[type="text"],
+  .inp-row input[type="number"],
+  .inp-row select,
+  .inp-row textarea {
+    font: inherit; font-size: 13px; font-family: var(--font-mono, monospace);
+    width: 100%;
+    border: 1px solid #000;
+    background: #fff;
+    padding: 6px 10px;
+    line-height: 1.3;
+    color: #000;
+    appearance: none;
+    -webkit-appearance: none;
+    border-radius: 0;
+  }
+  .inp-row select {
+    background-image:
+      linear-gradient(45deg, transparent 50%, #000 50%),
+      linear-gradient(135deg, #000 50%, transparent 50%);
+    background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 26px;
+  }
+  .inp-row input:focus,
+  .inp-row select:focus { outline: 2px solid #000; outline-offset: 1px; }
+  .inp-check { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13px; }
+  .inp-check input { width:14px; height:14px; accent-color:#000; }
+  .inp-range { display:flex; flex-direction:column; gap:6px; }
+  .inp-range .row { display:flex; justify-content:space-between; font-size:11px; color:var(--muted); font-variant-numeric: tabular-nums; }
+  .inp-range input[type="range"] { accent-color:#000; width:100%; }
+</style>
+</head>
+<body><div class="card">
+  <div class="section-title" style="margin-bottom:10px">inputs · full-width, readable · 13px mono, 6×10 padding</div>
+
+  <div class="inp-grid">
+    <label class="inp-row">
+      <span class="inp-label">keyframe_interval</span>
+      <input type="number" value="2" min="1" max="10">
+    </label>
+
+    <label class="inp-row">
+      <span class="inp-label">backend</span>
+      <select>
+        <option>mast3r_slam</option>
+        <option>droid_slam</option>
+        <option>dpvo</option>
+        <option>monogs</option>
+      </select>
+    </label>
+
+    <label class="inp-row">
+      <span class="inp-label">job_name</span>
+      <input type="text" value="warehouse-drone-run-2024-03-11">
+    </label>
+
+    <label class="inp-row">
+      <span class="inp-label">window_size</span>
+      <input type="number" value="8" min="4" max="32">
+    </label>
+
+    <div class="inp-row">
+      <span class="inp-label">conf_percentile · <b style="color:#000">55</b></span>
+      <div class="inp-range">
+        <input type="range" min="0" max="95" value="55">
+        <div class="row"><span>0</span><span>95</span></div>
+      </div>
+    </div>
+
+    <div class="inp-row">
+      <span class="inp-label">toggles</span>
+      <label class="inp-check"><input type="checkbox" checked>mask sky</label>
+      <label class="inp-check"><input type="checkbox">offload cpu</label>
+    </div>
+  </div>
+
+  <hr class="rule">
+  <div class="mono-small">right-aligned 96px variant exists for in-panel stat rows; this is the full-width form variant.</div>
+</div></body></html>

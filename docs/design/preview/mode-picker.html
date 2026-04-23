@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mode Picker</title>
+<link rel="stylesheet" href="_frame.css"></head>
+<body><div class="card dithered">
+  <div style="background:#fff; border:1px solid #000; max-width:360px">
+    <div style="background:#000; color:#fff; padding:5px 10px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase">MODE</div>
+    <div style="padding:10px; display:grid; gap:8px">
+      <div style="display:flex; gap:4px">
+        <button class="btn" data-pressed="true" style="flex:1">lingbot</button>
+        <button class="btn" style="flex:1">slam</button>
+        <button class="btn" style="flex:1">gaussian splat</button>
+      </div>
+      <div style="font-size:11px; letter-spacing:0.10em; text-transform:uppercase; color:var(--muted)">BACKEND</div>
+      <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:4px">
+        <button class="btn" data-pressed="true">MASt3R-SLAM</button>
+        <button class="btn">DROID-SLAM</button>
+        <button class="btn">DPVO</button>
+        <button class="btn">MonoGS</button>
+      </div>
+      <div style="font-size:11px; color:var(--muted)">calibration-free · best default for FPV</div>
+    </div>
+  </div>
+</div></body></html>

@@ -1,0 +1,80 @@
+/* Shared harness for every preview card. Keeps the card visually quiet
+   and compact (~700px wide); the asset name renders outside. */
+@font-face { font-family: "Commit Mono"; src: url("../fonts/commit-mono-400.woff2") format("woff2"); font-weight: 100 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Commit Mono"; src: url("../fonts/commit-mono-700.woff2") format("woff2"); font-weight: 501 900; font-style: normal; font-display: swap; }
+
+:root {
+  --bg: #ffffff;
+  --fg: #000000;
+  --soft: #f4f4f4;
+  --soft-2: #e8e8e8;
+  --muted: #5c5c5c;
+  --rule: #000000;
+  --danger: #8a0000;
+  --ok: #2b5a2b;
+  --font-mono: "Berkeley Mono", "Commit Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 16px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  background: #ffffff;
+  font-feature-settings: "ss01", "ss02";
+  -webkit-font-smoothing: antialiased;
+}
+.card {
+  padding: 18px 20px;
+  background: #ffffff;
+}
+.card.dithered {
+  background-color: #e8e8e8;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
+  background-size: 4px 4px;
+  image-rendering: pixelated;
+}
+.mono-small { font-size: var(--fs-xs); color: var(--muted); }
+.row { display: flex; gap: 10px; align-items: center; }
+.col { display: flex; flex-direction: column; gap: 10px; }
+.rule { border: 0; border-top: 1px solid var(--rule); margin: 10px 0; }
+.section-title { font-size: var(--fs-xs); letter-spacing: 0.10em; text-transform: uppercase; color: var(--muted); }
+
+/* Swatch atoms */
+.sw { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sw .chip {
+  height: 54px;
+  border: 1px solid var(--rule);
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 6px 8px;
+  font-size: var(--fs-xs);
+}
+.sw .name { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; }
+.sw .hex { font-size: var(--fs-xs); color: var(--muted); }
+
+/* Button atoms (mirror globals.css) */
+.btn {
+  font: inherit; font-size: var(--fs-sm); color: var(--fg);
+  background: var(--bg); border: 1px solid var(--rule);
+  padding: 4px 10px; cursor: pointer;
+  text-transform: lowercase; letter-spacing: 0.02em; line-height: 1.2;
+}
+.btn:hover { background: var(--fg); color: var(--bg); }
+.btn[data-pressed="true"] { background: var(--fg); color: var(--bg); }
+.btn:disabled { color: var(--muted); border-color: var(--muted); cursor: not-allowed; background: var(--bg); }
+
+/* Chip atom */
+.sm-chip {
+  display: inline-block; padding: 1px 6px; border: 1px solid var(--rule);
+  text-transform: lowercase; font-size: var(--fs-xs); letter-spacing: 0.04em;
+  line-height: 1.25; background: var(--bg);
+}
+.sm-chip[data-status="ready"],
+.sm-chip[data-status="open"],
+.sm-chip[data-status="done"],
+.sm-chip[data-status="completed"] { background: var(--ok); color: var(--bg); border-color: var(--ok); }
+.sm-chip[data-status="failed"] { background: var(--danger); color: var(--bg); border-color: var(--danger); }
+.sm-chip[data-status="queued"],
+.sm-chip[data-status="inference"] { background: var(--soft); }
+.sm-chip[data-status="cancelled"] { background: #e6e6e6; }

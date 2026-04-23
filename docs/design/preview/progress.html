@@ -1,0 +1,110 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Progress</title>
+<link rel="stylesheet" href="_frame.css">
+<style>
+  .pb { height: 10px; border: 1px solid #000; background: #f4f4f4; overflow: hidden; position: relative; }
+  .pb > .fill { background: #000; height: 100%; transition: width 200ms linear; }
+
+  /* ACTIVE — diagonal marching stripes overlaid on the filled portion */
+  .pb.active > .fill {
+    background-image:
+      repeating-linear-gradient(-45deg,
+        #000 0, #000 6px,
+        #3a3a3a 6px, #3a3a3a 12px);
+    background-size: 16.97px 16.97px;
+    animation: pb-march 0.9s linear infinite;
+  }
+  @keyframes pb-march {
+    0%   { background-position: 0 0; }
+    100% { background-position: 16.97px 0; }
+  }
+
+  /* INDETERMINATE — bar is a fixed-width block that ping-pongs */
+  .pb.indet > .fill {
+    width: 32% !important;
+    background-image:
+      repeating-linear-gradient(-45deg,
+        #000 0, #000 6px,
+        #3a3a3a 6px, #3a3a3a 12px);
+    background-size: 16.97px 16.97px;
+    animation: pb-march 0.9s linear infinite, pb-pingpong 1.4s ease-in-out infinite;
+  }
+  @keyframes pb-pingpong {
+    0%   { transform: translateX(-10%); }
+    50%  { transform: translateX(220%); }
+    100% { transform: translateX(-10%); }
+  }
+
+  /* PAUSED — halted; dashed track border + dashed fill edge + muted shade */
+  .pb.paused { border-style: dashed; background: #ececec; }
+  .pb.paused > .fill { background: #5c5c5c; border-right: 1px dashed #000; }
+
+  /* FAILED — blood-red with diagonal hatch */
+  .pb.failed { border-color: #8a0000; background: #f4e3e3; }
+  .pb.failed > .fill {
+    background-color: #8a0000;
+    background-image:
+      repeating-linear-gradient(-45deg,
+        #8a0000 0, #8a0000 4px,
+        #6a0000 4px, #6a0000 8px);
+  }
+
+  /* DONE — ok green + terminating tick */
+  .pb.done { border-color: #2b5a2b; }
+  .pb.done > .fill { background: #2b5a2b; }
+  .pb.done::after {
+    content: "✓";
+    position: absolute;
+    right: 4px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px; color: #fff;
+    font-family: var(--font-mono, monospace);
+  }
+
+  .pb-row { display: grid; grid-template-columns: 120px 1fr 56px; gap: 10px; align-items: center; margin-top: 6px; }
+  .pb-tag { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .pb-pct { font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+</style>
+</head>
+<body><div class="card">
+  <div class="section-title" style="margin-bottom:8px">progress · state carried by fill, not just width</div>
+
+  <div class="pb-row">
+    <span class="pb-tag">resting · 0%</span>
+    <div class="pb"><div class="fill" style="width:0%"></div></div>
+    <span class="pb-pct">—</span>
+  </div>
+
+  <div class="pb-row">
+    <span class="pb-tag">active · determinate</span>
+    <div class="pb active"><div class="fill" style="width:62%"></div></div>
+    <span class="pb-pct">62%</span>
+  </div>
+
+  <div class="pb-row">
+    <span class="pb-tag">active · indeterminate</span>
+    <div class="pb indet"><div class="fill"></div></div>
+    <span class="pb-pct">—</span>
+  </div>
+
+  <div class="pb-row">
+    <span class="pb-tag">paused</span>
+    <div class="pb paused"><div class="fill" style="width:48%"></div></div>
+    <span class="pb-pct">48%</span>
+  </div>
+
+  <div class="pb-row">
+    <span class="pb-tag">failed</span>
+    <div class="pb failed"><div class="fill" style="width:34%"></div></div>
+    <span class="pb-pct">34%</span>
+  </div>
+
+  <div class="pb-row">
+    <span class="pb-tag">done</span>
+    <div class="pb done"><div class="fill" style="width:100%"></div></div>
+    <span class="pb-pct">100%</span>
+  </div>
+
+  <hr class="rule">
+  <div class="mono-small">active = marching diagonal hatch · paused = dashed rule · failed = danger red hatch · done = ok green + ✓ glyph · resting = empty track</div>
+</div></body></html>

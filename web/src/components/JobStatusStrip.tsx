@@ -2,9 +2,22 @@
 
 import { useEffect, useState } from "react";
 
+import { ThreeTile, type TileId } from "@/components/ThreeTile";
 import { getJobCost } from "@/lib/api";
 import { type JobStatusDerived, type StageState } from "@/hooks/useJobStatus";
 import type { JobStatus, ProviderCostReadout } from "@/lib/types";
+
+// Map pipeline stage names to the ThreeTile glyph factory name. When a
+// stage transitions to "active", we render its 14px tile inline in the
+// glyph column — only the active row pays the render cost. Stages not
+// listed here fall back to the CSS-drawn pulsing dot.
+const STAGE_TILES: Record<string, TileId> = {
+  ingest: "stage_ingest",
+  preproc: "stage_preproc",
+  inference: "stage_inference",
+  meshing: "stage_meshing",
+  export: "stage_export",
+};
 
 interface Props {
   derived: JobStatusDerived;
@@ -25,25 +38,103 @@ function formatDuration(seconds: number | null | undefined): string {
   return s === 0 ? `${m}m` : `${m}m ${s}s`;
 }
 
-function StageLine({ stage }: { stage: StageState }) {
-  let meta = "—";
-  if (stage.state === "active") {
-    meta =
-      stage.latest_progress !== null
-        ? `${Math.round(stage.latest_progress * 100)}%`
-        : "…";
-  } else if (stage.state === "done" || stage.state === "failed") {
-    meta =
-      stage.duration_s !== null ? formatDuration(stage.duration_s) : "—";
+function StageRow({ stage }: { stage: StageState }) {
+  // Mini-bar width: 100% when done, actual progress when active, 0 otherwise.
+  let pct: number | null = null;
+  if (stage.state === "done") pct = 1;
+  else if (stage.state === "active")
+    pct = stage.latest_progress !== null ? stage.latest_progress : null;
+
+  // Right-column layout. Fixed 52px bar + 36px right-aligned percentage
+  // inside `.sl-prog` so the bar never shifts as the pct widens from —
+  // to 100%. done/failed rows show their duration; pending rows get
+  // dashes in both slots.
+  let progressCell: React.ReactNode;
+  if (stage.state === "done" || stage.state === "active") {
+    const pctLabel =
+      pct === null ? "…" : `${Math.round(pct * 100)}%`;
+    progressCell = (
+      <span className="sl-prog">
+        <span className="sl-mini">
+          <span
+            style={{
+              width: pct === null ? "0%" : `${Math.round(pct * 100)}%`,
+            }}
+          />
+        </span>
+        <span className="sl-pct">{pctLabel}</span>
+      </span>
+    );
+  } else if (stage.state === "failed") {
+    progressCell = (
+      <span className="sl-prog">
+        <span className="sl-mini" />
+        <span className="sl-pct">failed</span>
+      </span>
+    );
   } else {
-    meta = "pending";
+    progressCell = (
+      <span className="sl-prog">
+        <span className="sl-mini" />
+        <span className="sl-pct sl-empty">—</span>
+      </span>
+    );
   }
+
+  const elapsedCell =
+    stage.state === "done" || stage.state === "failed"
+      ? stage.duration_s !== null
+        ? formatDuration(stage.duration_s)
+        : "—"
+      : stage.state === "active"
+        ? "…"
+        : "—";
+
+  // Glyph column. Active rows ideally render a tiny three.js tile for
+  // the stage (spinning reel for ingest, scanline sweep for preproc,
+  // etc.); if the stage name isn't mapped we fall back to the CSS
+  // pulsing dot. Done/failed/pending render their literal glyph.
+  const activeTile =
+    stage.state === "active" ? STAGE_TILES[stage.name] ?? null : null;
+  let glyphContent: React.ReactNode;
+  if (activeTile) {
+    glyphContent = (
+      <ThreeTile
+        tile={activeTile}
+        height={14}
+        className="sl-tile"
+        style={{ height: 14, width: 14 }}
+      />
+    );
+  } else if (stage.state === "done") {
+    glyphContent = "✓";
+  } else if (stage.state === "failed") {
+    glyphContent = "✕";
+  } else if (stage.state === "active") {
+    // unknown stage — blank, CSS draws the pulsing dot via ::before
+    glyphContent = "";
+  } else {
+    glyphContent = "·";
+  }
+
   return (
-    <div className="stage-line" data-state={stage.state}>
-      <span className="sl-glyph" />
-      <span className="sl-name">{stage.name}</span>
-      <span className="sl-meta">{meta}</span>
-    </div>
+    <tr data-state={stage.state}>
+      <td>
+        <span
+          className={"sl-glyph" + (activeTile ? " has-tile" : "")}
+        >
+          {glyphContent}
+        </span>
+      </td>
+      <td>
+        <span className="sl-name">
+          {stage.name}
+          <span className="leader" />
+        </span>
+      </td>
+      <td className="num">{progressCell}</td>
+      <td className="num">{elapsedCell}</td>
+    </tr>
   );
 }
 
@@ -148,33 +239,62 @@ function VramCell({ derived }: { derived: JobStatusDerived }) {
   );
 }
 
-function StagesCell({ derived, wsStatus }: { derived: JobStatusDerived; wsStatus: string }) {
+function StagesCell({
+  derived,
+  wsStatus,
+}: {
+  derived: JobStatusDerived;
+  wsStatus: "connecting" | "open" | "closed";
+}) {
   const activeMsg = derived.activeStage
-    ? derived.stages.find((s) => s.name === derived.activeStage)?.latest_message ?? ""
+    ? derived.stages.find((s) => s.name === derived.activeStage)
+        ?.latest_message ?? ""
     : "";
   return (
     <div className="status-cell">
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <span className="status-label">pipeline</span>
-        <span className="kv-row">
+        <span className="ws-pill" data-status={wsStatus}>
+          <span className="dot" />
+          ws {wsStatus}
+        </span>
+      </div>
+      <table className="sl-table">
+        <thead>
+          <tr>
+            <th style={{ width: 18 }} />
+            <th>stage</th>
+            <th className="num" style={{ width: 120 }}>
+              progress
+            </th>
+            <th className="num" style={{ width: 72 }}>
+              elapsed
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {derived.stages.map((s) => (
+            <StageRow key={s.name} stage={s} />
+          ))}
+        </tbody>
+      </table>
+      {(derived.elapsed_s !== null || activeMsg) && (
+        <div className="sl-footer">
+          <span
+            title={activeMsg || undefined}
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {activeMsg || "—"}
+          </span>
           {derived.elapsed_s !== null && (
             <span>
               elapsed <b>{formatDuration(derived.elapsed_s)}</b>
             </span>
           )}
-          <span>
-            ws <b>{wsStatus}</b>
-          </span>
-        </span>
-      </div>
-      <div className="stage-list">
-        {derived.stages.map((s) => (
-          <StageLine key={s.name} stage={s} />
-        ))}
-      </div>
-      {activeMsg && (
-        <div className="latest-msg" title={activeMsg}>
-          {activeMsg}
         </div>
       )}
     </div>
@@ -259,7 +379,23 @@ function ProgressCell({
           </span>
         )}
       </div>
-      <div className={`pb${indeterminate ? " indeterminate" : ""}`}>
+      {/* State-encoded progress bar (redesign-v1). `done` and `failed`
+          paint the terminal look; `active` overlays the marching hatch
+          so you can see the job is live; `indeterminate` ping-pongs
+          when we have no percent to anchor the width. */}
+      <div
+        className={`pb${
+          jobStatus === "ready"
+            ? " done"
+            : jobStatus === "failed"
+              ? " failed"
+              : indeterminate
+                ? " indeterminate"
+                : active !== null
+                  ? " active"
+                  : ""
+        }`}
+      >
         <div
           className="fill"
           style={{

@@ -1,5 +1,6 @@
 "use client";
 
+import { ThreeTile, type TileId } from "@/components/ThreeTile";
 import type {
   GsplatBackend,
   JobSummary,
@@ -8,6 +9,30 @@ import type {
 } from "@/lib/types";
 
 export type StudioMode = "lingbot" | "slam" | "gsplat";
+
+// Which three.js tile each mode / backend shows in its picker card.
+// Kept here (not in types.ts) because it's a UI-only concern.
+const MODE_TILES: Record<StudioMode, TileId> = {
+  lingbot: "lingbot",
+  slam: "slam",
+  gsplat: "gsplat",
+};
+const MODE_DESCRIPTIONS: Record<StudioMode, string> = {
+  lingbot:
+    "feed-forward reconstruction. point cloud + textured mesh + camera path.",
+  slam: "mast3r, droid, dpvo. frame-by-frame tracking + map.",
+  gsplat:
+    "gaussian splat training. chains off a slam/lingbot job, or runs monogs directly.",
+};
+const SLAM_BACKEND_TILES: Record<SlamBackend, TileId> = {
+  mast3r_slam: "mast3r",
+  droid_slam: "droid",
+  dpvo: "dpvo",
+};
+const GSPLAT_BACKEND_TILES: Record<GsplatBackend, TileId> = {
+  gsplat: "gsplat",
+  monogs: "monogs",
+};
 
 interface Props {
   mode: StudioMode;
@@ -81,61 +106,82 @@ export function ModePicker({
         <span>mode</span>
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 8 }}>
-        <div style={{ display: "flex", gap: 4 }}>
-          {(["lingbot", "slam", "gsplat"] as StudioMode[]).map((m) => (
-            <button
-              key={m}
-              type="button"
-              disabled={disabled}
-              onClick={() => onMode(m)}
-              aria-pressed={mode === m}
-              style={{
-                flex: 1,
-                background:
-                  mode === m ? "var(--fg)" : "var(--panel-bg, transparent)",
-                color: mode === m ? "var(--bg)" : "var(--fg)",
-              }}
-            >
-              {m === "lingbot"
-                ? "lingbot"
-                : m === "slam"
-                  ? "slam"
-                  : "gaussian splat"}
-            </button>
-          ))}
+        <div
+          className="tile-row"
+          style={{ gridTemplateColumns: "repeat(3, 1fr)" }}
+        >
+          {(["lingbot", "slam", "gsplat"] as StudioMode[]).map((m, i) => {
+            const active = mode === m;
+            return (
+              <button
+                key={m}
+                type="button"
+                className={"tile" + (active ? " is-active" : "")}
+                disabled={disabled}
+                onClick={() => onMode(m)}
+                data-pressed={active ? "true" : "false"}
+                style={{
+                  borderRight: i < 2 ? "1px solid var(--rule)" : "none",
+                }}
+              >
+                <ThreeTile
+                  tile={MODE_TILES[m]}
+                  height={60}
+                  className="tile-canvas"
+                  ariaLabel={`${m} preview`}
+                />
+                <span className="tile-label">
+                  {active ? "> " : ""}
+                  {m === "gsplat" ? "gaussian splat" : m}
+                </span>
+                <span className="tile-desc">{MODE_DESCRIPTIONS[m]}</span>
+              </button>
+            );
+          })}
         </div>
 
         {mode === "slam" && (
           <>
             <div className="section-title">backend</div>
             <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: 4,
-              }}
+              className="tile-row"
+              style={{ gridTemplateColumns: "repeat(3, 1fr)" }}
             >
-              {(Object.keys(SLAM_BACKEND_LABELS) as SlamBackend[]).map((b) => (
-                <button
-                  key={b}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onSlamBackend(b)}
-                  aria-pressed={slamBackend === b}
-                  style={{
-                    background:
-                      slamBackend === b
-                        ? "var(--fg)"
-                        : "var(--panel-bg, transparent)",
-                    color: slamBackend === b ? "var(--bg)" : "var(--fg)",
-                  }}
-                >
-                  {SLAM_BACKEND_LABELS[b]}
-                </button>
-              ))}
-            </div>
-            <div className="mono-small" style={{ opacity: 0.7 }}>
-              {SLAM_BACKEND_HINTS[slamBackend]}
+              {(Object.keys(SLAM_BACKEND_LABELS) as SlamBackend[]).map(
+                (b, i, arr) => {
+                  const active = slamBackend === b;
+                  return (
+                    <button
+                      key={b}
+                      type="button"
+                      className={"tile" + (active ? " is-active" : "")}
+                      disabled={disabled}
+                      onClick={() => onSlamBackend(b)}
+                      data-pressed={active ? "true" : "false"}
+                      style={{
+                        borderRight:
+                          i < arr.length - 1
+                            ? "1px solid var(--rule)"
+                            : "none",
+                      }}
+                    >
+                      <ThreeTile
+                        tile={SLAM_BACKEND_TILES[b]}
+                        height={52}
+                        className="tile-canvas"
+                        ariaLabel={`${b} preview`}
+                      />
+                      <span className="tile-label">
+                        {active ? "> " : ""}
+                        {SLAM_BACKEND_LABELS[b]}
+                      </span>
+                      <span className="tile-desc">
+                        {SLAM_BACKEND_HINTS[b]}
+                      </span>
+                    </button>
+                  );
+                },
+              )}
             </div>
           </>
         )}
@@ -144,35 +190,44 @@ export function ModePicker({
           <>
             <div className="section-title">backend</div>
             <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(2, 1fr)",
-                gap: 4,
-              }}
+              className="tile-row"
+              style={{ gridTemplateColumns: "repeat(2, 1fr)" }}
             >
               {(Object.keys(GSPLAT_BACKEND_LABELS) as GsplatBackend[]).map(
-                (b) => (
-                  <button
-                    key={b}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => onGsplatBackend(b)}
-                    aria-pressed={gsplatBackend === b}
-                    style={{
-                      background:
-                        gsplatBackend === b
-                          ? "var(--fg)"
-                          : "var(--panel-bg, transparent)",
-                      color: gsplatBackend === b ? "var(--bg)" : "var(--fg)",
-                    }}
-                  >
-                    {GSPLAT_BACKEND_LABELS[b]}
-                  </button>
-                ),
+                (b, i, arr) => {
+                  const active = gsplatBackend === b;
+                  return (
+                    <button
+                      key={b}
+                      type="button"
+                      className={"tile" + (active ? " is-active" : "")}
+                      disabled={disabled}
+                      onClick={() => onGsplatBackend(b)}
+                      data-pressed={active ? "true" : "false"}
+                      style={{
+                        borderRight:
+                          i < arr.length - 1
+                            ? "1px solid var(--rule)"
+                            : "none",
+                      }}
+                    >
+                      <ThreeTile
+                        tile={GSPLAT_BACKEND_TILES[b]}
+                        height={52}
+                        className="tile-canvas"
+                        ariaLabel={`${b} preview`}
+                      />
+                      <span className="tile-label">
+                        {active ? "> " : ""}
+                        {GSPLAT_BACKEND_LABELS[b]}
+                      </span>
+                      <span className="tile-desc">
+                        {GSPLAT_BACKEND_HINTS[b]}
+                      </span>
+                    </button>
+                  );
+                },
               )}
-            </div>
-            <div className="mono-small" style={{ opacity: 0.7 }}>
-              {GSPLAT_BACKEND_HINTS[gsplatBackend]}
             </div>
 
             {gsplatBackend === "gsplat" && (

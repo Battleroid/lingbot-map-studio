@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Tooltip</title>
+<link rel="stylesheet" href="_frame.css"></head>
+<body><div class="card">
+  <div class="section-title" style="margin-bottom:14px">tooltip · fg-filled box with sharp 0,2,0 drop</div>
+  <div style="display:flex; gap:40px; align-items:flex-start">
+    <div style="position:relative">
+      <span style="display:inline-flex; gap:4px; align-items:center">kv cache window
+        <span style="display:inline-flex; width:12px; height:12px; border:1px solid #000; background:#000; color:#fff; align-items:center; justify-content:center; font-size:9px">?</span>
+      </span>
+      <div style="position:absolute; left:0; top:22px; background:#000; color:#fff; padding:6px 8px; font-size:11px; line-height:1.35; max-width:260px; box-shadow: 0 2px 0 #000">Number of keyframes kept in the attention KV cache. Lower = lower steady-state VRAM but less long-range context. 16–32 is safe; 64+ can OOM on longer clips.</div>
+    </div>
+  </div>
+</div></body></html>
