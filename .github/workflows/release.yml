@@ -1,7 +1,13 @@
 name: release
 
+# Release cuts after ci.yml finishes successfully on main — the same
+# workflow_run gate as publish.yml. A failed test suite never produces
+# a new tag, so it also never produces the versioned Docker images
+# that tag would trigger via publish.yml.
 on:
-  push:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -25,11 +31,16 @@ jobs:
     name: tag + release
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history so `git tag -l` can find the latest vX.Y.Z.
           fetch-depth: 0
+          # Pin to the exact commit CI green-lit.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: compute next version
         id: v
@@ -70,6 +81,6 @@ jobs:
         with:
           tag_name: ${{ steps.v.outputs.tag }}
           name: ${{ steps.v.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ github.event.workflow_run.head_sha || github.sha }}
           generate_release_notes: true
           make_latest: "true"
