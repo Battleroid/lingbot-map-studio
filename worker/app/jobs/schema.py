@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 JobStatus = Literal[
-    "queued", "ingest", "inference", "export", "ready", "failed", "cancelled"
+    "queued",
+    "ingest",
+    "inference",
+    "export",
+    "slam",
+    "meshing",
+    "training",
+    "ready",
+    "failed",
+    "cancelled",
 ]
 EventLevel = Literal["info", "warn", "error", "stdout", "stderr", "debug"]
 EventStage = Literal[
@@ -14,10 +24,40 @@ EventStage = Literal[
     "ingest",
     "checkpoint",
     "inference",
+    "slam",
+    "training",
+    "meshing",
     "export",
     "mesh",
     "artifact",
     "system",
+]
+
+ProcessorId = Literal[
+    "lingbot",
+    "droid_slam",
+    "mast3r_slam",
+    "dpvo",
+    "monogs",
+    "gsplat",
+]
+SlamBackend = Literal["droid_slam", "mast3r_slam", "dpvo", "monogs"]
+ProcessorKind = Literal["reconstruction", "slam", "gsplat"]
+
+# Widened to cover all future modes. Artifact.kind is free-form string in
+# practice — the UI keys off suffix — but we enumerate the known kinds so the
+# viewer + tool panel code has exhaustive switches to hang off of.
+ArtifactKind = Literal[
+    "glb",
+    "ply",
+    "obj",
+    "npz",
+    "json",
+    # SLAM / GS additions (kinds used from Phase 4 / Phase 5 onward).
+    "splat_ply",
+    "splat_sogs",
+    "pose_graph_json",
+    "keyframes_jsonl",
 ]
 
 
@@ -25,8 +65,138 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class JobConfig(BaseModel):
+# --- Execution target (local container vs cloud provider) --------------
+
+
+ExecutionTarget = Literal[
+    "local",
+    "fake",
+    "runpod",
+    "runpod-serverless",
+    "vast",
+    "lambda_labs",
+    "paperspace-core",
+    "paperspace-gradient",
+    "aws-ec2",
+    "gcp-gce",
+    "azure-vm",
+]
+
+
+class InstanceSpec(BaseModel):
+    """Per-job provider-agnostic spec. Provider adapters translate this
+    into their native API shape (RunPod gpuTypeId, Vast offer query, EC2
+    InstanceType, etc.)."""
+
     model_config = ConfigDict(protected_namespaces=())
+
+    gpu_class: str = "rtx4090"
+    gpu_count: int = 1
+    disk_gb: int = 64
+    spot: bool = False
+    region: Optional[str] = None
+    # Docker image the provider will boot. Defaults to the provider
+    # adapter's `Dockerfile.remote`-built image.
+    image: Optional[str] = None
+    # Free-form env overrides merged on top of the dispatcher's standard
+    # env (STUDIO_BROKER_URL / STUDIO_JOB_TOKEN / WORKER_MODE / WORKER_CLASS).
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class ExecutionFields(BaseModel):
+    """Cross-cutting knobs every GPU-bearing processor config inherits.
+
+    Introduced in cloud-phase R1 alongside `InstanceSpec`. Kept as a
+    separate mixin (rather than stuffed into `PreprocFields`) so the
+    gsplat config — which has no preprocessing — still opts in cleanly
+    via multiple inheritance.
+
+    Defaulting `execution_target="local"` preserves pre-cloud behaviour
+    byte-for-byte: existing rows deserialise as local jobs and route
+    to the local claim loop exactly as they did before.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    execution_target: ExecutionTarget = "local"
+    instance_spec: Optional[InstanceSpec] = None
+    # Per-job ceiling on cloud spend in cents. `None` falls back to
+    # `settings.cloud_cost_cap_cents_default`. Dispatcher refuses to
+    # launch if `provider.estimate_cost(spec) > cost_cap_cents`.
+    cost_cap_cents: Optional[int] = None
+
+
+class PreprocFields(BaseModel):
+    """FPV-oriented preprocessing knobs shared between lingbot + SLAM.
+
+    Kept flat (no nested model) so legacy rows keep deserialising: Pydantic
+    fills in defaults for fields a stored JSON blob doesn't know about. The
+    mixin is inlined into each concrete config below rather than nested, so
+    `cfg.preproc_<stage>` continues to read the way existing ingest code
+    expects.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    # --- Geometric / optical pre-passes (ffmpeg) ---
+    preproc_fisheye: bool = False
+    fisheye_in_fov: float = 165.0
+    fisheye_out_fov: float = 90.0
+
+    # --- Analog noise / flicker cleanup (ffmpeg) ---
+    # `preproc_denoise` is the basic hqdn3d+deflicker pair (already present
+    # pre-Phase-3). `preproc_analog_cleanup` adds temporal `atadenoise` tuned
+    # for VHS/analog static — heavier, only use for genuinely noisy sources.
+    preproc_denoise: bool = False
+    preproc_analog_cleanup: bool = False
+    preproc_deflicker: bool = False  # standalone deflicker without the denoise pair
+
+    # --- OSD/HUD mask (Python post-extract) ---
+    preproc_osd_mask: bool = False
+    osd_mask_samples: int = 60
+    osd_mask_std_threshold: float = 5.0
+    osd_mask_dilate: int = 2
+    osd_detect_text: bool = True
+    osd_edge_persist_frac: float = 0.75
+
+    # --- Colour normalisation (Python post-extract) ---
+    # Grey-world white-balance + gamma-consistent per-frame histogram
+    # stretch. Cheap and very effective on VHS-era chroma fringing.
+    preproc_color_norm: bool = False
+
+    # --- Rolling-shutter correction (Python post-extract) ---
+    # v1 only handles dominant-skew case: estimates a global shear from
+    # optical flow between rows, applies an inverse y-shear per frame.
+    # Full per-row RS remains out of scope.
+    preproc_rs_correction: bool = False
+    # Optional explicit shear override; None = estimate from data.
+    rs_shear_px_per_row: Optional[float] = None
+
+    # --- Motion deblur (Python post-extract) ---
+    # "none" → off. "unsharp" → classical unsharp-mask + gating (fast, CPU).
+    # "nafnet" → learned single-image deblurring; Phase 3 ships the hook but
+    # the checkpoint fetcher lands with its own PR to avoid surprise VRAM use.
+    preproc_deblur: Literal["none", "unsharp", "nafnet"] = "none"
+    # Per-frame sharpness gate: only apply deblur to frames whose Laplacian
+    # variance falls below this fraction of the clip median. 1.0 = always,
+    # 0.5 = only the blurriest half, etc.
+    deblur_sharpness_gate: float = 0.6
+
+    # --- Keyframe scoring (Python post-extract) ---
+    # Produces `frame_scores.jsonl` next to the frames dir. Consumed by SLAM
+    # backends with a keyframe_policy="score_gated" and by the UI's live
+    # preview toolbar. No cost to emitting scores even when unused.
+    preproc_keyframe_score: bool = False
+    keyframe_min_sharpness_frac: float = 0.0  # drop frames below this quantile
+    keyframe_min_motion_px: float = 0.0  # drop frames with near-zero flow
+
+
+class LingbotConfig(PreprocFields, ExecutionFields):
+    """Config for the existing dense-pointmap model. Unchanged from the
+    original JobConfig — a `processor` discriminator is added so it can
+    participate in the AnyJobConfig union."""
+
+    processor: Literal["lingbot"] = "lingbot"
 
     model_id: str = "lingbot-map"
     mode: Literal["streaming", "windowed"] = "streaming"
@@ -57,23 +227,9 @@ class JobConfig(BaseModel):
     mask_black_bg: bool = False
     mask_white_bg: bool = False
 
-    # --- Preprocessing (applied during ffmpeg ingest / post-extract) ---
-    # Fisheye → rectilinear unwrap. Most FPV cams are ~155-170° in_fov; 90° out
-    # keeps the useful centre and trims the rim where distortion was worst.
-    preproc_fisheye: bool = False
-    fisheye_in_fov: float = 165.0
-    fisheye_out_fov: float = 90.0
-    # Temporal denoise + deflicker — kills analog static and brightness flicker.
-    preproc_denoise: bool = False
-    # Detect static pixels across frames and inpaint them out (OSD/telemetry overlays).
-    preproc_osd_mask: bool = False
-    osd_mask_samples: int = 60
-    osd_mask_std_threshold: float = 5.0
-    osd_mask_dilate: int = 2
-    # Second detector: flag pixels that live near an edge in >N% of sampled
-    # frames. Catches changing OSD digits that the stddev detector misses.
-    osd_detect_text: bool = True
-    osd_edge_persist_frac: float = 0.75
+    # Preprocessing fields (fisheye, denoise, OSD, analog cleanup, color
+    # normalisation, rolling shutter, deblur, keyframe scoring) come from
+    # the `PreprocFields` mixin above.
 
     # Per-job VRAM soft limit in GB. If allocated GPU memory crosses this during
     # inference the watchdog aborts the job. None = use worker-wide default.
@@ -85,9 +241,216 @@ class JobConfig(BaseModel):
     partial_snapshot_every: int = 60
 
 
+class _SlamConfigBase(PreprocFields, ExecutionFields):
+    """Shared SLAM tunables. Not used directly — one of the per-backend
+    subclasses below is the actual union member with its own discriminator.
+
+    Kept as a base class (rather than inlining fields into each subclass) so
+    the list of common knobs has exactly one definition. The per-backend
+    subclasses only carry the fields that materially differ between
+    implementations (buffer sizes, learning-rate caps, splat-specific params).
+    """
+
+    # Common to every backend.
+    model_id: str = "default"
+    max_frames: Optional[int] = None
+    downscale: float = 1.0
+    stride: int = 1
+    fps: float = 10.0
+    calibration: Literal["auto", "manual"] = "auto"
+    fx: Optional[float] = None
+    fy: Optional[float] = None
+    cx: Optional[float] = None
+    cy: Optional[float] = None
+    keyframe_policy: Literal["score_gated", "translation", "hybrid"] = "score_gated"
+    # Per-backend keyframe throttle; base default is 6 frames (matches
+    # lingbot's keyframe cadence). Backends with their own heuristic
+    # (MASt3R, MonoGS) override in config.
+    keyframe_interval: int = 6
+    # If score_gated: keep frames whose quality is above this percentile
+    # of the clip median. 0.5 = reject the blurriest half.
+    score_gate_quantile: float = 0.5
+    # Live preview: emit partial_splat/partial PLY + camera_path.json every
+    # N processed keyframes. 0 disables live updates.
+    partial_snapshot_every: int = 5
+    # Optional end-of-job Poisson meshing. Cheap wrapper over existing
+    # mesh.ops.surface_recon. Disabled for MonoGS (it emits a splat, not
+    # points) and DPVO (trajectory-only is often cleaner as-is).
+    run_poisson_mesh: bool = False
+    poisson_depth: int = 8
+
+    vram_soft_limit_gb: Optional[float] = None
+
+
+class DroidSlamConfig(_SlamConfigBase):
+    """DROID-SLAM. Dense optical-flow based; VRAM-heavy but globally
+    consistent on long indoor/outdoor sequences. Calibration should be
+    provided for best results — `auto` estimates from FOV but wobbles."""
+
+    processor: Literal["droid_slam"] = "droid_slam"
+    # Upstream caps tracked keyframes; we expose the buffer cap so users
+    # with 16 GB cards can drop it from the 512 default.
+    buffer_size: int = 512
+    # Every Nth frame becomes a DROID keyframe; DROID's own policy also
+    # adds extra keyframes when optical-flow magnitude is high.
+    keyframe_interval: int = 4
+    # Global bundle-adjustment iterations after the forward pass.
+    global_ba_iters: int = 25
+
+
+class Mast3rSlamConfig(_SlamConfigBase):
+    """MASt3R-SLAM. Calibration-free — the best default for analog FPV
+    footage where fx/fy aren't reliably known. Uses a score-gated keyframe
+    policy by default to drop blurred frames before tracking."""
+
+    processor: Literal["mast3r_slam"] = "mast3r_slam"
+    # MASt3R's own matcher threshold; lower = more matches per pair, more
+    # VRAM. 0.1 is the upstream default.
+    match_threshold: float = 0.1
+    # Frames per tracking window. Smaller windows are cheaper but miss
+    # loop closures on flythrough sequences.
+    window_size: int = 16
+
+
+class DpvoConfig(_SlamConfigBase):
+    """DPVO (Deep Patch VO). Lightweight patch-based VO; best for long
+    clips or low-VRAM machines. Produces a sparse cloud — enable
+    `run_poisson_mesh=False` and feed into a follow-on GS job for dense
+    reconstruction."""
+
+    processor: Literal["dpvo"] = "dpvo"
+    # Upstream default = 96 patches/frame. Lower = cheaper, less stable.
+    patch_per_frame: int = 96
+    # Max removed keyframes kept in the sparse cloud — higher = denser
+    # trajectory, more memory.
+    buffer_keyframes: int = 2048
+
+
+class MonogsConfig(_SlamConfigBase):
+    """MonoGS (Photo-SLAM variant). Gaussian-splat SLAM — emits a splat
+    scene incrementally. Short-circuits Phase 5: if a user picks MonoGS
+    they get a splat out of SLAM directly; the downstream gsplat training
+    job becomes optional."""
+
+    processor: Literal["monogs"] = "monogs"
+    # Refinement iterations after each keyframe is added to the splat.
+    refine_iters: int = 50
+    # Opacity prune threshold for the final scene.
+    prune_opacity: float = 0.005
+    # MonoGS doesn't produce a point cloud suitable for Poisson meshing.
+    run_poisson_mesh: bool = False
+
+
+# Keep the old name as a type alias so existing code (ingest.py, preproc.py)
+# that typed against SlamConfig continues to work. New code should reference
+# the specific per-backend class or _SlamConfigBase.
+SlamConfig = (
+    DroidSlamConfig | Mast3rSlamConfig | DpvoConfig | MonogsConfig
+)
+
+
+class GsplatConfig(ExecutionFields):
+    """3D Gaussian Splat training mode.
+
+    Consumes a completed SLAM (or Lingbot) job's output as initial state and
+    trains a 3DGS scene with gsplat. See the Phase 5 plan for why this is a
+    plain BaseModel rather than a `PreprocFields` descendant — ingest and
+    preprocessing happen on the *source* job; the GS job only reads that
+    job's `reconstruction.ply` + `pose_graph.json`.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    processor: Literal["gsplat"] = "gsplat"
+    # The job whose frames, poses, and sparse cloud seed this training run.
+    # Enforced `ready` by the API on enqueue.
+    source_job_id: str
+    iterations: int = 30_000
+    # Spherical-harmonic degree. 0 = RGB only (cheapest), 3 = full (default).
+    sh_degree: int = 3
+    # Densification cadence (in iterations) and opacity prune threshold.
+    densify_interval: int = 500
+    # Iterations between opacity pruning passes. Gaussians with alpha below
+    # `prune_opacity` get dropped.
+    prune_interval: int = 200
+    prune_opacity: float = 0.005
+    # Seeding strategy. `point_cloud` initialises means + colours from the
+    # source job's `reconstruction.ply`; `random` samples from a unit sphere.
+    init_from: Literal["point_cloud", "random"] = "point_cloud"
+    # How many random gaussians when init_from="random". Ignored otherwise.
+    random_init_count: int = 100_000
+    # Resolution schedule — train at `initial_resolution` then upsample.
+    # 1.0 = full, 0.25 = quarter-res warmup. A single float means constant.
+    initial_resolution: float = 0.5
+    upsample_at_iter: int = 5_000
+    # Live preview cadence — every N iterations publish a `partial_splat.ply`.
+    preview_every_iters: int = 1_000
+    # Cap partial-snapshot cloud size so browser playback stays smooth.
+    preview_max_gaussians: int = 500_000
+    # Optional bake-to-mesh after training (SuGaR-lite path). Disabled by
+    # default; user invokes via the splat tool panel in Phase 6.
+    bake_mesh_after: bool = False
+    bake_mesh_depth: int = 10
+
+    vram_soft_limit_gb: Optional[float] = None
+
+
+# Discriminated union. Pydantic v2 picks the right class based on the
+# "processor" field. Each SLAM backend gets its own member so per-backend
+# fields aren't hidden inside a shared shape.
+AnyJobConfig = Annotated[
+    Union[
+        LingbotConfig,
+        DroidSlamConfig,
+        Mast3rSlamConfig,
+        DpvoConfig,
+        MonogsConfig,
+        GsplatConfig,
+    ],
+    Field(discriminator="processor"),
+]
+
+# Back-compat alias so modules that only know the lingbot shape keep working.
+# New code should reference AnyJobConfig (at boundaries) or the specific
+# LingbotConfig/SlamConfig/GsplatConfig (inside a processor).
+JobConfig = LingbotConfig
+
+_ANY_JOB_CONFIG_ADAPTER: TypeAdapter[AnyJobConfig] = TypeAdapter(AnyJobConfig)
+
+
+def parse_job_config(raw: Union[str, bytes, dict[str, Any]]) -> AnyJobConfig:
+    """Parse a raw job config payload into the discriminated union.
+
+    Rows created before this refactor have no `processor` field — treat them
+    as lingbot so existing jobs keep loading cleanly.
+    """
+    if isinstance(raw, (str, bytes)):
+        data = json.loads(raw)
+    else:
+        data = dict(raw)
+    if "processor" not in data:
+        data["processor"] = "lingbot"
+    return _ANY_JOB_CONFIG_ADAPTER.validate_python(data)
+
+
+def dump_job_config(cfg: AnyJobConfig) -> str:
+    """JSON-encode a config regardless of which branch of the union it is."""
+    return _ANY_JOB_CONFIG_ADAPTER.dump_json(cfg).decode()
+
+
+def processor_kind(cfg: AnyJobConfig) -> ProcessorKind:
+    """Group the specific processor id into its broader kind for UI wiring."""
+    pid = cfg.processor
+    if pid == "lingbot":
+        return "reconstruction"
+    if pid == "gsplat":
+        return "gsplat"
+    return "slam"
+
+
 class Artifact(BaseModel):
     name: str
-    kind: Literal["glb", "ply", "obj", "npz", "json"]
+    kind: ArtifactKind
     revision: int = 0
     size_bytes: int = 0
     created_at: datetime = Field(default_factory=_now)
@@ -107,7 +470,7 @@ class JobEvent(BaseModel):
 class Job(BaseModel):
     id: str
     status: JobStatus = "queued"
-    config: JobConfig
+    config: AnyJobConfig
     uploads: list[str] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
     frames_total: Optional[int] = None
@@ -123,6 +486,7 @@ class JobSummary(BaseModel):
     updated_at: datetime
     frames_total: Optional[int] = None
     artifact_count: int = 0
+    processor: ProcessorId = "lingbot"
 
 
 class MeshEditRequest(BaseModel):

@@ -26,6 +26,70 @@ class Settings(BaseSettings):
     # torch.cuda.OutOfMemoryError.
     vram_default_soft_limit_gb: float = 19.0
 
+    # --- Cloud execution (Phase R1) ---
+    # How a remote worker reaches this API. Used when dispatching a job to a
+    # rented pod; the pod's env gets this as STUDIO_BROKER_URL.
+    cloud_broker_public_url: str = "http://localhost:8000"
+    # Shared secret that signs the per-job HMAC tokens issued to remote
+    # workers. Rotate by changing this and letting in-flight jobs finish
+    # under the old key (tokens carry their expiry; the signer key is
+    # checked on every request).
+    cloud_broker_hmac_key: str = "change-me-in-production"
+    # Lifetime of a per-job broker token. Long enough for a cold-start +
+    # ingest + inference + export on a slow provider; short enough that a
+    # leaked token times out before it's useful.
+    cloud_broker_token_ttl_s: int = 6 * 60 * 60
+    # Studio-wide hard upper bound on per-job cloud spend. Dispatcher
+    # refuses to launch if the estimate exceeds this regardless of the
+    # job-level cap. Defaults to $50.
+    cloud_cost_cap_cents_default: int = 5000
+
+    # --- Per-provider credentials (Phase R2+). ---
+    # Each provider adapter reads only the fields it needs; unset
+    # fields leave that provider unregistered (its import-time self-
+    # registration checks the key and bails if missing). This keeps
+    # the fake provider the only one available in a fresh dev install
+    # so tests + CI stay lean.
+    runpod_api_key: str = ""
+    runpod_api_base: str = "https://rest.runpod.io/v1"
+    # Vast.ai — account-level API key.
+    vast_api_key: str = ""
+    vast_api_base: str = "https://console.vast.ai/api/v0"
+    # Lambda Labs — account-level API key.
+    lambda_labs_api_key: str = ""
+    lambda_labs_api_base: str = "https://cloud.lambdalabs.com/api/v1"
+    # Paperspace — account-level API key. Gradient + Core share auth.
+    paperspace_api_key: str = ""
+    paperspace_api_base: str = "https://api.paperspace.io"
+    # AWS / GCP / Azure lean on their own SDKs for credentials; the
+    # URLs below are only for SDK overrides (LocalStack, private
+    # endpoints, gov-cloud). Empty = use SDK defaults.
+    aws_endpoint_url: str = ""
+    aws_region_default: str = "us-east-1"
+    gcp_service_account_json: str = ""
+    gcp_region_default: str = "us-central1"
+    azure_subscription_id: str = ""
+    azure_region_default: str = "eastus"
+
+    # --- Artifact storage transport (Phase R5). ---
+    # Remote workers upload artifacts through one of two backends:
+    # - `broker` (default): chunked PUT to /api/worker/artifacts/{name},
+    #   same volume that already served local jobs.
+    # - `minio`: dispatcher-issued pre-signed PUT URL to an S3-compatible
+    #   bucket. The studio pulls bytes back locally on finalize so the
+    #   viewer still reads from the artifacts dir. Enabled by setting
+    #   `cloud_storage="minio"` and populating the minio_* fields.
+    cloud_storage: str = "broker"
+    minio_endpoint_url: str = "http://minio:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "lingbot-artifacts"
+    minio_region: str = "us-east-1"
+    # TTL for pre-signed PUT URLs handed to remote workers. Long enough
+    # to upload a multi-hundred-MB splat on a slow uplink; short enough
+    # that a leaked URL times out before it's useful.
+    minio_presign_ttl_s: int = 15 * 60
+
     model_config = SettingsConfigDict(env_file=None, case_sensitive=False)
 
     def ensure_dirs(self) -> None:

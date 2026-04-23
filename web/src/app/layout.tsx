@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "lingbot-map studio",
+  title: "vid3d studio",
   description: "browser-driven 3D reconstruction",
 };
 

@@ -16,11 +16,13 @@ import { CameraPath, type CameraPose } from "./CameraPath";
 import { LassoSelect } from "./LassoSelect";
 import { MeshLayer } from "./MeshLayer";
 import { PointCloud } from "./PointCloud";
+import { SplatLayer } from "./SplatLayer";
 import { useViewerStore } from "@/lib/viewerStore";
 
 interface Props {
   glbUrl: string | null;
   plyUrl: string | null;
+  splatUrl?: string | null;
   cameraPath?: { fps: number; poses: CameraPose[] } | null;
 }
 
@@ -165,16 +167,23 @@ function FlySpeedModifier({
   return null;
 }
 
-export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
+export function ViewerCanvas({ glbUrl, plyUrl, splatUrl, cameraPath }: Props) {
   const mode = useViewerStore((s) => s.mode);
   const cameraMode = useViewerStore((s) => s.cameraMode);
   const refitSignal = useViewerStore((s) => s.refitSignal);
   const lassoActive = useViewerStore((s) => s.lassoActive);
+  const renderLayers = useViewerStore((s) => s.renderLayers);
+  const showCameraPath = useViewerStore((s) => s.showCameraPath);
   const controls = useRef<OrbitControlsImpl>(null);
   const flyRef = useRef<FlyControlsImpl>(null);
 
-  const showPoints = mode === "points" || mode === "points-color";
-  const showMesh = mode === "mesh" || mode === "wireframe";
+  const showPoints =
+    (mode === "points" || mode === "points-color") &&
+    renderLayers.has("points");
+  const showMesh =
+    (mode === "mesh" || mode === "wireframe") && renderLayers.has("mesh");
+  const showSplat = renderLayers.has("splat");
+  const showPath = showCameraPath && renderLayers.has("camera_path");
 
   const cameraProps = useMemo(
     () => ({
@@ -209,10 +218,11 @@ export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
             {showPoints && plyUrl && (
               <PointCloud url={plyUrl} color={mode === "points-color"} />
             )}
+            {showSplat && splatUrl && <SplatLayer url={splatUrl} />}
             {/* Camera path lives INSIDE Bounds so the initial fit includes
                 both the reconstructed points and the camera trajectory —
                 otherwise tight-clustered points hide a wide-flight path. */}
-            {cameraPath && cameraPath.poses.length > 1 && (
+            {showPath && cameraPath && cameraPath.poses.length > 1 && (
               <CameraPath
                 poses={cameraPath.poses}
                 recordedFps={cameraPath.fps || 10}
@@ -263,7 +273,7 @@ export function ViewerCanvas({ glbUrl, plyUrl, cameraPath }: Props) {
           fly · WASD move · drag to look · R/F up/down · Q/E roll · hold SHIFT to crawl
         </div>
       )}
-      {!glbUrl && !plyUrl && (
+      {!glbUrl && !plyUrl && !splatUrl && (
         <div
           style={{
             position: "absolute",

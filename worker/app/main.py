@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import (
-    Body,
     FastAPI,
     File,
     Form,
@@ -22,24 +20,33 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.cloud import dispatcher as cloud_dispatcher
+from app.cloud import session_creds as cloud_session_creds
+from app.cloud.broker import router as broker_router
+from app.cloud.providers import registered_ids as cloud_registered_ids
 from app.config import settings
 from app.jobs import cancel as cancel_mod
-from app.jobs import drafts, runner, store
+from app.jobs import drafts, store
 from app.jobs.events import bus
 from app.jobs.schema import (
     Artifact,
+    GsplatConfig,
     Job,
-    JobConfig,
     JobEvent,
+    LingbotConfig,
     MeshEditRequest,
     ReexportRequest,
+    parse_job_config,
 )
+from app.processors.gsplat import io as gsplat_io
+from app.processors import worker_class_for
 from app.mesh.ops import apply_op, mesh_summary
 from app.pipeline.export import reexport
 from app.pipeline.inference import load_cached_predictions
 from app.pipeline.preview import (
     apply_fisheye,
     extract_frame,
+    render_fpv_preview,
     render_osd_preview,
 )
 from app.pipeline.probe import probe_video, suggest_config
@@ -49,54 +56,99 @@ from app.utils.paths import new_job_id, safe_filename
 log = logging.getLogger(__name__)
 
 
-async def _sweep_orphaned_jobs() -> None:
-    """Jobs that were running when the worker last stopped are orphaned.
+async def _maybe_dispatch_remote(job_id: str, config: Any) -> None:
+    """If the config targets a cloud provider, kick off the launch.
 
-    Their `asyncio.create_task` died with the process but their sqlite row
-    still claims `queued / ingest / inference / export`. On startup flip
-    them to `failed` so the UI shows a clear state and the user can
-    delete or restart.
+    Local jobs return immediately — they run in the in-process worker's
+    claim loop exactly as before. Remote jobs call the dispatcher; on
+    failure we flip the row to `failed` and publish an error event so
+    the user sees what went wrong in the UI instead of a job that sits
+    in `queued` forever.
     """
-    rows = await store.list_jobs()
-    running = {"queued", "ingest", "inference", "export"}
-    orphaned = 0
-    for r in rows:
-        if r.status in running:
-            await store.update_job(
-                r.id,
-                status="failed",
-                error=(
-                    "worker restarted while this job was running — "
-                    "marked as orphaned. delete or restart."
-                ),
-            )
-            orphaned += 1
-    if orphaned:
-        log.info("marked %d orphaned job(s) as failed on startup", orphaned)
-
-
-def _apply_vram_cap() -> None:
-    """Cap this process's total CUDA memory to a fraction of device VRAM.
-
-    Set before any real allocations happen. Prevents a runaway job from
-    paging GPU memory on WSL2, which can hang the Windows host.
-    """
+    target = getattr(config, "execution_target", "local")
+    if target == "local":
+        return
     try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return
-        frac = max(0.1, min(1.0, settings.vram_limit_fraction))
-        torch.cuda.set_per_process_memory_fraction(frac, 0)
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        log.info(
-            "cuda memory cap: %.2f × %.1f GB = %.1f GB",
-            frac,
-            total,
-            frac * total,
+        result = await cloud_dispatcher.launch(job_id, config)
+    except cloud_dispatcher.DispatchError as exc:
+        log.warning("dispatch failed for %s: %s", job_id, exc)
+        await store.update_job(job_id, status="failed", error=f"dispatch failed: {exc}")
+        await bus.publish(
+            JobEvent(
+                job_id=job_id,
+                stage="queue",
+                level="error",
+                message=f"remote dispatch failed: {exc}",
+            )
         )
+        await bus.close(job_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        log.warning("failed to apply vram cap: %s", exc)
+        log.exception("unexpected dispatch error for %s", job_id)
+        await store.update_job(
+            job_id, status="failed", error=f"dispatch crashed: {type(exc).__name__}: {exc}"
+        )
+        await bus.publish(
+            JobEvent(
+                job_id=job_id,
+                stage="queue",
+                level="error",
+                message=f"remote dispatch crashed: {exc}",
+            )
+        )
+        await bus.close(job_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="queue",
+            message=f"launched on {result.provider_id}",
+            data={
+                "provider": result.provider_id,
+                "instance_id": result.instance_handle.instance_id,
+                "region": result.instance_handle.region,
+                "gpu_class": result.instance_handle.gpu_class,
+                "cost_estimate_cents": result.cost_estimate_cents,
+            },
+        )
+    )
+
+
+async def _sweep_orphaned_jobs() -> None:
+    """Reap jobs whose worker process died and never released the claim.
+
+    Phase 2: the API no longer runs the inference itself, so 'orphaned'
+    means 'a worker crashed holding a claim'. `store.sweep_stale_claims`
+    checks `claimed_at` against the same threshold the worker uses for
+    its heartbeat, so jobs still actively running by a live worker are
+    left alone.
+
+    We call this once on API startup and then let the workers' background
+    sweep loop keep the DB clean afterwards.
+    """
+    reaped = await store.sweep_stale_claims(stale_after_s=60.0)
+    if reaped:
+        log.info("reaped %d orphaned job(s) on startup", reaped)
+
+
+async def _periodic_sweep_loop(stop: asyncio.Event) -> None:
+    """API-side copy of the stale-claim sweep.
+
+    The workers already run this, but the API container has a different
+    restart cadence and may notice a crashed worker first. Cheap — one
+    SELECT + ~0 updates per pass unless something actually crashed.
+    """
+    while not stop.is_set():
+        try:
+            reaped = await store.sweep_stale_claims(stale_after_s=60.0)
+            if reaped:
+                log.info("api stale-claim sweep reaped %d job(s)", reaped)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("api stale-claim sweep failed: %s", exc)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            continue
 
 
 @asynccontextmanager
@@ -105,11 +157,24 @@ async def lifespan(app: FastAPI):
     settings.ensure_dirs()
     await store.init_store()
     await _sweep_orphaned_jobs()
-    _apply_vram_cap()
-    yield
+
+    # The API no longer runs CUDA itself, so no vram cap here; each worker
+    # container applies its own in `worker_main.py`. Spawn the periodic
+    # sweep so crashed workers' jobs get reaped even when this API process
+    # is the first to notice.
+    sweep_stop = asyncio.Event()
+    sweep_task = asyncio.create_task(_periodic_sweep_loop(sweep_stop))
+    try:
+        yield
+    finally:
+        sweep_stop.set()
+        try:
+            await asyncio.wait_for(sweep_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
 
 
-app = FastAPI(title="lingbot-map studio worker", lifespan=lifespan)
+app = FastAPI(title="vid3d studio worker", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -117,6 +182,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Broker surface for remote workers. Gated by per-request HMAC tokens;
+# mounting it here gives remote pods the same origin as the studio API
+# so they only open a single outbound HTTPS connection.
+app.include_router(broker_router)
 
 _MIME = {
     ".glb": "model/gltf-binary",
@@ -149,12 +219,138 @@ async def list_jobs() -> list[dict[str, Any]]:
     return [r.model_dump(mode="json") for r in rows]
 
 
+def _cloud_session_id(request: Request) -> Optional[str]:
+    """Return the opaque cloud-session id the browser sends with every
+    `/api/cloud/*` request, or `None` if the header is absent. Kept as
+    a helper so the handful of endpoints that read it can stay
+    one-liners."""
+    return request.headers.get("x-cloud-session") or None
+
+
+@app.get("/api/cloud/providers")
+async def list_cloud_providers(request: Request) -> dict[str, Any]:
+    """Advertise which execution targets are live in this deploy.
+
+    The frontend populates its ExecutionPanel dropdown from this list —
+    it avoids showing e.g. `aws-ec2` when boto3 isn't installed or no
+    credentials are configured. `"local"` is always included; the fake
+    provider surfaces in non-production builds for UI smoke tests.
+
+    `session_targets` lists providers whose credentials were pasted in
+    the browser for *this* session. Those aren't registered with the
+    process-wide adapter registry (because that would leak between
+    users on a shared studio instance); the dispatcher folds them in
+    at launch time via `session_creds.get_credentials`.
+    """
+    session_id = _cloud_session_id(request)
+    return {
+        "targets": ["local", *cloud_registered_ids()],
+        "session_targets": cloud_session_creds.known_providers_for_session(session_id),
+        "cost_cap_cents_default": settings.cloud_cost_cap_cents_default,
+    }
+
+
+@app.post("/api/cloud/credentials/session", status_code=201)
+async def set_session_credentials(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    """Install per-session credentials for a cloud provider.
+
+    The browser calls this after the user pastes keys into
+    `CloudCredentialsDialog`. We stash the values in-process keyed by
+    an opaque session id (minted here on first use and returned in the
+    response header) and never write them to SQLite. A closed tab = a
+    forgotten secret.
+
+    Request shape:
+        { "provider": "runpod", "values": {"api_key": "..."} }
+
+    The session id the browser should store in sessionStorage comes
+    back in the `x-cloud-session` response header as well as the body.
+    """
+    provider = body.get("provider")
+    values = body.get("values") or {}
+    if not provider or not isinstance(provider, str):
+        raise HTTPException(status_code=422, detail="provider is required")
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=422, detail="values must be an object")
+    if not values:
+        raise HTTPException(status_code=422, detail="values cannot be empty")
+
+    session_id = _cloud_session_id(request) or cloud_session_creds.new_session()
+    cloud_session_creds.set_credentials(session_id, provider, {str(k): str(v) for k, v in values.items()})
+    return JSONResponse(
+        content={"provider": provider, "session_id": session_id},
+        headers={"x-cloud-session": session_id},
+        status_code=201,
+    )
+
+
+@app.delete("/api/cloud/credentials/session")
+async def clear_session_credentials(request: Request) -> dict[str, Any]:
+    """Forget every credential the current session stashed. Called on
+    the browser's explicit "log out of cloud" action. Absent-header
+    calls are a no-op (idempotent)."""
+    session_id = _cloud_session_id(request)
+    if session_id:
+        cloud_session_creds.clear_session(session_id)
+    return {"cleared": bool(session_id)}
+
+
+@app.post("/api/cloud/estimate")
+async def estimate_cloud_cost(body: dict[str, Any]) -> dict[str, Any]:
+    """Return the predicted cost in cents for a given target + spec.
+
+    Used by `CostPreview` on a debounce in the browser; must be
+    side-effect-free. We intentionally don't mint a token or touch the
+    provider's billing endpoints here — each adapter's `estimate_cost`
+    is whatever the provider's public pricing API exposes (or a flat
+    constant for providers without one).
+    """
+    from app.cloud.providers import get as get_provider
+    from app.jobs.schema import InstanceSpec
+
+    target = body.get("execution_target")
+    if not target or target == "local":
+        return {"cents": 0, "expected_duration_s": 0}
+    spec_raw = body.get("instance_spec") or {}
+    try:
+        spec = InstanceSpec.model_validate(spec_raw)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"invalid instance_spec: {exc}") from exc
+    try:
+        provider = get_provider(target)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    duration_s = int(body.get("expected_duration_s") or 15 * 60)
+    cents = await provider.estimate_cost(spec, duration_s)
+    return {
+        "cents": cents,
+        "expected_duration_s": duration_s,
+        "target": target,
+    }
+
+
 @app.get("/api/jobs/{job_id}")
 async def get_job(job_id: str) -> dict[str, Any]:
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.model_dump(mode="json")
+
+
+@app.get("/api/jobs/{job_id}/cost")
+async def get_job_cost(job_id: str) -> dict[str, Any]:
+    """Cloud-cost readout for a single job.
+
+    Surfaced by `JobStatusStrip`'s provider badge on a slow poll. Reads
+    straight off the job row's bookkeeping columns — the dispatcher
+    seeds `cost_estimate_cents` at launch, a future billing sweeper
+    will fill in `cost_actual_cents`. Local jobs return zeros so the
+    UI can render a uniform shape regardless of execution target.
+    """
+    summary = await store.get_cost_summary(job_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return summary
 
 
 @app.post("/api/drafts", status_code=201)
@@ -366,6 +562,88 @@ async def preview_osd(
     )
 
 
+_FPV_PREVIEW_STAGES = {"color_norm", "deblur", "analog_cleanup", "rs_correction"}
+
+
+@app.get("/api/drafts/{draft_id}/preview/fpv")
+async def preview_fpv(
+    draft_id: str,
+    stage: str,
+    shear: float | None = None,
+    analog_cleanup: bool = False,
+    deflicker: bool = False,
+) -> FileResponse:
+    """Return a PNG showing the effect of one Phase-3 FPV stage on a sampled frame.
+
+    `stage` must be one of `color_norm`, `deblur`, `analog_cleanup`,
+    `rs_correction`. `shear` overrides the rolling-shutter estimate.
+    `analog_cleanup`/`deflicker` toggle individual filters for the
+    `analog_cleanup` stage (they mirror the config flags so the preview
+    matches what ingest will actually run).
+    """
+    if stage not in _FPV_PREVIEW_STAGES:
+        raise HTTPException(status_code=422, detail=f"unknown stage: {stage}")
+
+    rec = drafts.load_draft(draft_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    sources = drafts.draft_video_paths(draft_id)
+    if not sources:
+        raise HTTPException(status_code=409, detail="draft has no uploaded files")
+    src_video = sources[0]
+    duration = rec.get("probes", [{}])[0].get("duration_s") if rec.get("probes") else None
+    ts = min(max(0.5, (duration or 0.0) * 0.1), max(0.5, (duration or 1.0) - 0.25))
+
+    preview_dir = drafts.draft_dir(draft_id) / "preview"
+    work_dir = preview_dir / "fpv"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    if stage == "analog_cleanup":
+        # Cache bucket differentiates which filters are composed for the preview.
+        filters: list[str] = []
+        if analog_cleanup:
+            filters.append(
+                "atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04:2a=0.02:2b=0.04"
+            )
+        if deflicker:
+            filters.append("deflicker=mode=pm:size=5")
+        key_bits = []
+        if analog_cleanup:
+            key_bits.append("ata")
+        if deflicker:
+            key_bits.append("dfl")
+        bucket = "_".join(key_bits) or "none"
+        out_png = preview_dir / f"fpv_analog_{bucket}.png"
+        params = {"filters": filters}
+    elif stage == "rs_correction":
+        shear_tag = "auto" if shear is None else f"{shear:+.3f}"
+        out_png = preview_dir / f"fpv_rs_{shear_tag}.png"
+        params = {"shear_override": shear}
+    else:
+        out_png = preview_dir / f"fpv_{stage}.png"
+        params = {}
+
+    if not out_png.exists():
+        try:
+            await render_fpv_preview(
+                video=src_video,
+                out_png=out_png,
+                stage=stage,
+                timestamp=ts,
+                params=params,
+                work_dir=work_dir,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(
+        out_png,
+        media_type="image/png",
+        filename=out_png.name,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
 @app.post("/api/jobs", status_code=201)
 async def create_job(
     videos: list[UploadFile] | None = File(None),
@@ -375,11 +653,15 @@ async def create_job(
     try:
         if not config:
             raise HTTPException(status_code=422, detail="config is required")
-        config_obj = JobConfig.model_validate_json(config)
+        config_obj = parse_job_config(config)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"invalid config: {exc}") from exc
+
+    # Worker-class routing is derived from the processor id. The API
+    # stamps it on the row; the matching worker container claims it.
+    worker_class = worker_class_for(config_obj)
 
     job_id = new_job_id()
     uploads_dir = settings.job_uploads(job_id)
@@ -414,8 +696,74 @@ async def create_job(
         raise HTTPException(status_code=422, detail="videos or draft_id required")
 
     job = Job(id=job_id, status="queued", config=config_obj, uploads=saved_names)
-    await store.create_job(job)
-    asyncio.create_task(runner.run_job(job_id, saved_paths, config_obj))
+    await store.create_job(job, worker_class=worker_class)
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="queue",
+            message=f"enqueued for worker-{worker_class}",
+            data={"worker_class": worker_class, "processor": config_obj.processor},
+        )
+    )
+    # Cloud jobs: kick off the remote launch. Local jobs bail out in the
+    # helper and the in-process claim loop picks the queued row up.
+    await _maybe_dispatch_remote(job_id, config_obj)
+    return {"id": job_id}
+
+
+@app.post("/api/jobs/gsplat-from/{source_job_id}", status_code=201)
+async def create_gsplat_job(
+    source_job_id: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Start a gsplat training job from a completed SLAM or Lingbot job.
+
+    Thin convenience over `POST /api/jobs`: looks up the source job,
+    validates it's a viable gsplat input, builds a default GsplatConfig,
+    and enqueues. `overrides` (JSON body) merges onto the default config
+    so the UI can surface training knobs without needing the full shape.
+    """
+    source = await store.get_job(source_job_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source job not found")
+    try:
+        gsplat_io.resolve_inputs(source)
+    except gsplat_io.GsplatInputsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    base: dict[str, Any] = {"processor": "gsplat", "source_job_id": source_job_id}
+    if overrides:
+        # Overrides can set training knobs but can't reroute the source —
+        # the path parameter is authoritative.
+        overrides = {k: v for k, v in overrides.items() if k not in {"processor", "source_job_id"}}
+        base.update(overrides)
+
+    try:
+        config_obj = parse_job_config(base)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"invalid gsplat overrides: {exc}") from exc
+    if not isinstance(config_obj, GsplatConfig):
+        raise HTTPException(status_code=500, detail="expected gsplat config")
+
+    worker_class = worker_class_for(config_obj)
+    job_id = new_job_id()
+    # gsplat jobs don't take uploads — they read from the source job.
+    settings.job_uploads(job_id).mkdir(parents=True, exist_ok=True)
+    job = Job(id=job_id, status="queued", config=config_obj, uploads=[])
+    await store.create_job(job, worker_class=worker_class)
+    await bus.publish(
+        JobEvent(
+            job_id=job_id,
+            stage="queue",
+            message=f"gsplat queued (source={source_job_id})",
+            data={
+                "worker_class": worker_class,
+                "processor": "gsplat",
+                "source_job_id": source_job_id,
+            },
+        )
+    )
+    await _maybe_dispatch_remote(job_id, config_obj)
     return {"id": job_id}
 
 
@@ -423,31 +771,29 @@ async def create_job(
 async def delete_job(job_id: str, force: bool = False) -> dict[str, Any]:
     """Delete a job and all its artifacts.
 
-    A "running" status column is only authoritative while this worker process
-    actually has an asyncio task for the job — tracked via the cancel-token
-    registry. If the column says running but no token exists, the job is
-    orphaned (from a prior worker crash) and is safe to delete. Passing
-    `?force=true` bypasses even the token check.
+    Cross-container authoritative signal: the DB row's `claimed_by` column.
+    If a worker currently owns the claim we refuse unless `force=true`.
+    An unclaimed row in a running status (e.g. the worker died without
+    cleaning up) is safe to delete — we mark it failed first for the
+    audit log, then drop the files.
     """
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    running_statuses = {"queued", "ingest", "inference", "export"}
-    if job.status in running_statuses and not force:
-        # Is there actually a live task? If not, this is an orphan.
-        has_token = cancel_mod.get_token.__wrapped__ if False else None  # noqa
-        token = cancel_mod._tokens.get(job_id)  # type: ignore[attr-defined]
-        if token is not None:
+    if job.status in store.RUNNING_STATUSES and not force:
+        async with store.session() as s:
+            row = await s.get(store.JobRow, job_id)
+            claimed_by = row.claimed_by if row else None
+        if claimed_by:
             raise HTTPException(
                 status_code=409,
                 detail="job is running — stop it first or pass force=true",
             )
-        # Orphaned: mark failed, then delete.
         await store.update_job(
             job_id,
             status="failed",
-            error="deleted while orphaned (no active worker task)",
+            error="deleted while orphaned (no active worker claim)",
         )
 
     await store.delete_job(job_id)
@@ -478,7 +824,10 @@ async def stop_job(job_id: str, force: bool = False) -> dict[str, Any]:
     if job.status in {"ready", "failed", "cancelled"}:
         raise HTTPException(status_code=409, detail="job already finished")
 
-    cancel_mod.cancel(job_id, "stopped by user")
+    # Cross-process cancel: flip the DB flag. The worker's cancel-poller
+    # mirrors it onto the in-flight CancelToken on its next tick, and the
+    # pipeline hooks raise JobCancelled at the next checkpoint.
+    await cancel_mod.request_cancel(job_id, "stopped by user")
 
     if force:
         await store.update_job(
@@ -486,7 +835,6 @@ async def stop_job(job_id: str, force: bool = False) -> dict[str, Any]:
             status="cancelled",
             error="force-stopped by user (GPU task may still be running in the background — a worker restart will fully clean it up)",
         )
-        cancel_mod.drop_token(job_id)
         await bus.publish(
             JobEvent(
                 job_id=job_id,
@@ -548,8 +896,21 @@ async def restart_job(job_id: str) -> dict[str, str]:
         config=old.config,
         uploads=saved_names,
     )
-    await store.create_job(new_job_obj)
-    asyncio.create_task(runner.run_job(new_id, saved_paths, old.config))
+    worker_class = worker_class_for(old.config)
+    await store.create_job(new_job_obj, worker_class=worker_class)
+    await bus.publish(
+        JobEvent(
+            job_id=new_id,
+            stage="queue",
+            message=f"restarted from {job_id}; enqueued for worker-{worker_class}",
+            data={
+                "worker_class": worker_class,
+                "processor": old.config.processor,
+                "source_job_id": job_id,
+            },
+        )
+    )
+    await _maybe_dispatch_remote(new_id, old.config)
     return {"id": new_id}
 
 
@@ -600,6 +961,17 @@ async def reexport_job(job_id: str, body: ReexportRequest) -> dict[str, Any]:
     job = await store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    # Reexport is lingbot-specific — it reloads cached model predictions and
+    # re-runs the lingbot GLB export with new thresholds. Other modes have
+    # their own reexport paths (added in later phases).
+    if not isinstance(job.config, LingbotConfig):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"reexport not supported for processor={job.config.processor!r}; "
+                "this endpoint only handles lingbot jobs"
+            ),
+        )
     try:
         predictions = load_cached_predictions(job_id, settings.data_dir)
     except FileNotFoundError as exc:

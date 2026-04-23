@@ -1,0 +1,22 @@
+### API container.
+###
+### Runs FastAPI + the websocket handler, serves static artifacts, and
+### enqueues jobs into the DB-backed queue. Does no GPU inference itself.
+### Still needs pymeshlab/trimesh because the mesh-edit + lingbot reexport
+### endpoints run synchronously against CPU-only code; the heavy lingbot
+### inference deps live in `Dockerfile.lingbot`.
+###
+### Build: `docker build -t lingbot-studio/api:latest -f worker/Dockerfile.api worker`
+ARG BASE_IMAGE=lingbot-studio/base:latest
+FROM ${BASE_IMAGE}
+
+# CPU-side libraries the API uses for synchronous mesh/reexport ops.
+# pymeshlab ships its own Qt runtime, so the libxcb/libxkb deps baked into
+# the base image are already sufficient.
+RUN pip install \
+        "pymeshlab==2023.12.post3" \
+        "trimesh==4.4.1"
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

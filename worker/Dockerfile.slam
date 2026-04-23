@@ -1,0 +1,33 @@
+### SLAM worker.
+###
+### Hosts the DROID-SLAM / MASt3R-SLAM / DPVO / MonoGS backends. Phase 2
+### ships stub processors so the queue + routing + event flow can be
+### verified end-to-end; Phase 4 drops in the real CUDA extensions.
+###
+### Torch/CUDA matrix is pinned to what the backends' upstream CUDA kernels
+### build against. When Phase 4 lands, this file also installs each
+### backend's pinned deps and builds their `setup.py` extensions.
+###
+### Build: `docker build -t lingbot-studio/worker-slam:latest -f worker/Dockerfile.slam worker`
+ARG BASE_IMAGE=lingbot-studio/base:latest
+FROM ${BASE_IMAGE}
+
+ENV WORKER_CLASS=slam
+
+# Torch 2.3 + cu121 tracks the matrix DROID-SLAM / MASt3R-SLAM currently
+# ship prebuilt extensions for. If Phase 4 upgrades one of those, bump
+# here and rebuild this image only.
+RUN pip install --index-url https://download.pytorch.org/whl/cu121 \
+        "torch==2.3.1" "torchvision==0.18.1"
+
+# Libraries used across SLAM backends (sparse linear algebra, vision utils,
+# optical flow). Kept minimal for Phase 2 — Phase 4 will add each backend's
+# own pinned deps.
+RUN pip install \
+        "opencv-python-headless==4.10.0.84" \
+        "scipy==1.13.1" \
+        "einops==0.8.0" \
+        "trimesh==4.4.1" \
+        "pymeshlab==2023.12.post3"
+
+CMD ["python", "-m", "app.worker_main", "--worker-class", "slam"]

@@ -5,11 +5,15 @@ import logging
 from pathlib import Path
 from typing import Callable, Iterable
 
-from app.jobs.schema import JobConfig, JobEvent
+from app.jobs.schema import JobEvent, LingbotConfig, SlamConfig
 
 log = logging.getLogger(__name__)
 
 ProgressFn = Callable[[JobEvent], "asyncio.Future | None"]
+
+# Config types that carry the PreprocFields mixin. Phase 3 stages accept
+# either; the runner / processors hand one in based on the active mode.
+PreprocCarrier = LingbotConfig | SlamConfig
 
 
 async def _publish(publish: ProgressFn, event: JobEvent) -> None:
@@ -91,15 +95,27 @@ async def concat_videos_to_frames(
     job_id: str,
     sources: Iterable[Path],
     dest: Path,
-    config: JobConfig,
+    config: PreprocCarrier,
     publish: ProgressFn,
 ) -> int:
-    """Extract frames from each video into one renumbered folder.
+    """Extract frames from each video into one renumbered folder, then run
+    the Phase 3 FPV preproc pipeline on the result.
 
-    Builds an ffmpeg filter chain from config: optional fisheye unwrap (v360),
-    temporal denoise (hqdn3d) + deflicker, then the fps resample. OSD masking
-    runs as a separate pass in Python after all frames are extracted.
+    Stage order:
+
+      1. Build the ffmpeg -vf chain from the config (fisheye, analog cleanup,
+         denoise/deflicker, fps resample).
+      2. Extract each source into a temp dir, renumber into `dest/`.
+      3. Apply the Python post-extract stages (OSD mask + inpaint, color
+         norm, rolling-shutter, deblur, keyframe score). Each stage is
+         idempotent and skipped when its flag is off.
     """
+    from app.pipeline.fpv_filters import (
+        color_norm,
+        deblur,
+        keyframe_score,
+        rolling_shutter,
+    )
     from app.pipeline.preproc import apply_osd_mask, build_ingest_filters
 
     dest.mkdir(parents=True, exist_ok=True)
@@ -131,7 +147,31 @@ async def concat_videos_to_frames(
         ),
     )
 
+    # --- Python post-extract pipeline --------------------------------------
+
     if config.preproc_osd_mask:
         await apply_osd_mask(job_id, dest, config, publish)
+
+    # Colour normalisation runs before any warping / deblur because those
+    # stages assume reasonably normalised luma.
+    if config.preproc_color_norm:
+        await color_norm.apply(job_id, dest, publish)
+
+    if config.preproc_rs_correction:
+        await rolling_shutter.apply(
+            job_id,
+            dest,
+            override_shear=config.rs_shear_px_per_row,
+            publish=publish,
+        )
+
+    if config.preproc_deblur != "none":
+        await deblur.apply(job_id, dest, config, publish)
+
+    # Always write scores when the flag is on (regardless of other stages).
+    # Cheap to produce and downstream backends that don't consume it just
+    # ignore the file.
+    if config.preproc_keyframe_score:
+        await keyframe_score.write_scores(job_id, dest, publish)
 
     return counter

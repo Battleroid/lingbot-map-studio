@@ -4,6 +4,7 @@ import { create } from "zustand";
 
 export type RenderMode = "mesh" | "wireframe" | "points" | "points-color";
 export type CameraMode = "orbit" | "fly";
+export type RenderLayer = "mesh" | "points" | "splat" | "camera_path";
 
 export interface MeshRevision {
   name: string;
@@ -47,6 +48,12 @@ interface ViewerState {
   selection: Set<number>;
   lassoActive: boolean;
   activeMeshName: string | null;
+  /** Visibility toggles for each renderable layer. Modes without a given
+   *  artifact (e.g. no splat) simply see the toggle silently ignored. */
+  renderLayers: Set<RenderLayer>;
+  /** Opacity floor applied to the splat preview; gaussians below this alpha
+   *  are hidden. Matches the splat tools panel prune slider. */
+  splatOpacityThreshold: number;
   refitSignal: number; // incremented to request a camera re-fit
   setMode: (m: RenderMode) => void;
   setCameraMode: (m: CameraMode) => void;
@@ -72,6 +79,9 @@ interface ViewerState {
   clearSelection: () => void;
   setLassoActive: (v: boolean) => void;
   setActiveMeshName: (name: string | null) => void;
+  toggleRenderLayer: (layer: RenderLayer) => void;
+  setRenderLayer: (layer: RenderLayer, on: boolean) => void;
+  setSplatOpacityThreshold: (v: number) => void;
   requestRefit: () => void;
 }
 
@@ -96,6 +106,8 @@ export const useViewerStore = create<ViewerState>((set) => ({
   selection: new Set(),
   lassoActive: false,
   activeMeshName: null,
+  renderLayers: new Set<RenderLayer>(["mesh", "points", "splat", "camera_path"]),
+  splatOpacityThreshold: 0.02,
   refitSignal: 0,
   setMode: (mode) => set({ mode }),
   setCameraMode: (cameraMode) =>
@@ -141,5 +153,21 @@ export const useViewerStore = create<ViewerState>((set) => ({
   clearSelection: () => set({ selection: new Set() }),
   setLassoActive: (lassoActive) => set({ lassoActive }),
   setActiveMeshName: (activeMeshName) => set({ activeMeshName }),
+  toggleRenderLayer: (layer) =>
+    set((s) => {
+      const next = new Set(s.renderLayers);
+      if (next.has(layer)) next.delete(layer);
+      else next.add(layer);
+      return { renderLayers: next };
+    }),
+  setRenderLayer: (layer, on) =>
+    set((s) => {
+      const next = new Set(s.renderLayers);
+      if (on) next.add(layer);
+      else next.delete(layer);
+      return { renderLayers: next };
+    }),
+  setSplatOpacityThreshold: (splatOpacityThreshold) =>
+    set({ splatOpacityThreshold }),
   requestRefit: () => set((s) => ({ refitSignal: s.refitSignal + 1 })),
 }));

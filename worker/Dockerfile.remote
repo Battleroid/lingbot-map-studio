@@ -1,0 +1,53 @@
+### Remote worker image — shipped to rented pods by the dispatcher.
+###
+### Same app code as the local workers; the only difference is the entry
+### point runs with `WORKER_MODE=remote` so it builds an `HttpJobSource`
+### against the studio's broker URL + the per-job HMAC token injected by
+### whichever `CloudProvider.launch` adapter kicked it off.
+###
+### Torch matrix here matches the SLAM image — MASt3R-SLAM / DROID-SLAM /
+### MonoGS / DPVO are the dominant remote workloads in Phase R1/R2. The
+### gsplat variant (matching `Dockerfile.gs`) builds as a separate tag:
+### `lingbot-studio/worker-remote-gs`. Providers pick one or the other by
+### setting the `image` field on `InstanceSpec`.
+###
+### Build (SLAM-flavoured, default):
+###   docker build -t lingbot-studio/worker-remote:latest \
+###     -f worker/Dockerfile.remote worker
+###
+### The dispatcher's DEFAULT_REMOTE_IMAGE constant must match the tag you
+### publish. If you serve this from a private registry, set
+### `instance_spec.image` on the job config to the fully-qualified URL.
+ARG BASE_IMAGE=lingbot-studio/base:latest
+FROM ${BASE_IMAGE}
+
+# Every remote pod runs in remote mode. `WORKER_CLASS` comes from the
+# dispatcher's launch env — no default here, because a wrong default
+# would silently have the pod claim the wrong family of job.
+ENV WORKER_MODE=remote
+
+# Torch/CUDA matrix aligned with the SLAM worker. Bump here and rebuild
+# if a backend's upstream kernels move.
+RUN pip install --index-url https://download.pytorch.org/whl/cu121 \
+        "torch==2.3.1" "torchvision==0.18.1"
+
+# `HttpJobSource` depends on httpx; the local worker doesn't.
+RUN pip install \
+        "httpx[http2]==0.27.2" \
+        "opencv-python-headless==4.10.0.84" \
+        "scipy==1.13.1" \
+        "einops==0.8.0" \
+        "trimesh==4.4.1" \
+        "pymeshlab==2023.12.post3"
+
+# Scratch root for the remote JobSource. Maps to a pod-local tmpfs or
+# EBS volume depending on provider; overridable at launch time.
+ENV LINGBOT_REMOTE_SCRATCH=/tmp/remote-scratch
+RUN mkdir -p /tmp/remote-scratch
+
+# The dispatcher injects these at launch:
+#   STUDIO_BROKER_URL  — https URL of the studio API
+#   STUDIO_JOB_TOKEN   — short-TTL HMAC token bound to this job
+#   WORKER_CLASS       — lingbot | slam | gs
+# `worker_main.py` reads them via env and wires up HttpJobSource.
+CMD ["python", "-m", "app.worker_main"]

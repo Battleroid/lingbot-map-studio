@@ -1,0 +1,216 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Extra tag to apply (besides sha / branch / semver)"
+        required: false
+        default: ""
+
+concurrency:
+  # Only one publish for a given ref at a time; cancel in-flight so a
+  # quick follow-up push doesn't wait behind a slow CUDA build.
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Shared base that every worker image FROMs. Downstream jobs can't run
+  # until this is in GHCR so they can pull it as the BASE_IMAGE build arg.
+  base:
+    name: build base image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      base_ref: ${{ steps.base_ref.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          swap-storage: false
+
+      - name: set lowercase image base
+        id: img
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "prefix=${{ env.REGISTRY }}/${repo}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.prefix }}/base
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ github.event.inputs.image_tag }},enable=${{ github.event.inputs.image_tag != '' }}
+
+      - name: build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./worker
+          file: ./worker/Dockerfile.base
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,scope=base,mode=max
+
+      - name: emit pinned base ref for downstream
+        id: base_ref
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "ref=${{ env.REGISTRY }}/${repo}/base:sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+  # One job per downstream worker/API image. They all pull the pinned
+  # base that the base job just pushed, so downstream builds only add
+  # the per-worker torch/CUDA matrix on top.
+  downstream:
+    name: build ${{ matrix.image }}
+    needs: base
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            dockerfile: worker/Dockerfile.api
+          - image: worker-lingbot
+            dockerfile: worker/Dockerfile.lingbot
+          - image: worker-slam
+            dockerfile: worker/Dockerfile.slam
+          - image: worker-gs
+            dockerfile: worker/Dockerfile.gs
+          - image: worker-remote
+            dockerfile: worker/Dockerfile.remote
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          swap-storage: false
+
+      - name: set lowercase image base
+        id: img
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "prefix=${{ env.REGISTRY }}/${repo}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.prefix }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ github.event.inputs.image_tag }},enable=${{ github.event.inputs.image_tag != '' }}
+
+      - name: build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./worker
+          file: ./${{ matrix.dockerfile }}
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ needs.base.outputs.base_ref }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  # The web container ships the Next.js standalone bundle. It doesn't
+  # share the base image, so it builds in parallel with base.
+  web:
+    name: build web
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: set lowercase image base
+        id: img
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "prefix=${{ env.REGISTRY }}/${repo}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.prefix }}/web
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ github.event.inputs.image_tag }},enable=${{ github.event.inputs.image_tag != '' }}
+
+      - name: build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_BASE=http://localhost:8000
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max

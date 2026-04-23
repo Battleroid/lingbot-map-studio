@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator, Optional
 
-from sqlalchemy import JSON, DateTime, String, Text, select
+from sqlalchemy import Boolean, DateTime, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
-from app.jobs.schema import Artifact, Job, JobConfig, JobStatus, JobSummary
+from app.jobs.schema import (
+    AnyJobConfig,
+    Artifact,
+    Job,
+    JobStatus,
+    JobSummary,
+    dump_job_config,
+    parse_job_config,
+)
 
 
 class Base(DeclarativeBase):
@@ -29,6 +39,47 @@ class JobRow(Base):
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # Queue + cross-process cancel bookkeeping (Phase 2).
+    # worker_class mirrors Processor.worker_class so each worker container only
+    # claims jobs it can actually run.
+    worker_class: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="lingbot"
+    )
+    # claimed_by is a stable identifier for the worker process that owns the
+    # job. NULL means the job is waiting in the queue. claimed_at anchors the
+    # orphan sweep: if the claim is older than the stale threshold and the job
+    # is still marked running, the claim is released.
+    claimed_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # cancel_requested is the cross-process signal. The API flips it; the
+    # worker's cancel-poller reads it and raises JobCancelled on next check.
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    # --- Cloud execution bookkeeping (Phase R1) ---
+    # execution_target mirrors the config field; duplicated on the row so the
+    # dispatcher can filter jobs by target without parsing config_json.
+    execution_target: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="local"
+    )
+    # Stable provider-side id of the rented instance (pod id, EC2 instance-id,
+    # Vast contract id, …). NULL for local runs and before launch returns.
+    provider_instance_id: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    # Cost bookkeeping in integer cents to dodge float rounding.
+    provider_cost_estimate_cents: Mapped[Optional[int]] = mapped_column(nullable=True)
+    provider_cost_actual_cents: Mapped[Optional[int]] = mapped_column(nullable=True)
+    # Blake2b hash of the per-job HMAC token we minted. Enough to audit which
+    # token authorised a given run without keeping the raw token (short-lived
+    # anyway). NULL for local runs that never minted a token.
+    remote_worker_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
 
 
 _engine = None
@@ -51,6 +102,27 @@ async def init_store() -> None:
         await conn.exec_driver_sql("PRAGMA synchronous=NORMAL")
         await conn.exec_driver_sql("PRAGMA busy_timeout=5000")
 
+        # Inline migration for pre-Phase-2 rows: the columns below were added
+        # after initial rollout, so existing DBs are missing them. SQLite
+        # doesn't allow IF NOT EXISTS on ADD COLUMN, so probe pragma first.
+        existing = await conn.exec_driver_sql("PRAGMA table_info(jobs)")
+        cols = {row[1] for row in existing.fetchall()}
+        migrations = [
+            ("worker_class", "ALTER TABLE jobs ADD COLUMN worker_class TEXT NOT NULL DEFAULT 'lingbot'"),
+            ("claimed_by", "ALTER TABLE jobs ADD COLUMN claimed_by TEXT"),
+            ("claimed_at", "ALTER TABLE jobs ADD COLUMN claimed_at DATETIME"),
+            ("cancel_requested", "ALTER TABLE jobs ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0"),
+            # Cloud Phase R1 — execution target + provider bookkeeping.
+            ("execution_target", "ALTER TABLE jobs ADD COLUMN execution_target TEXT NOT NULL DEFAULT 'local'"),
+            ("provider_instance_id", "ALTER TABLE jobs ADD COLUMN provider_instance_id TEXT"),
+            ("provider_cost_estimate_cents", "ALTER TABLE jobs ADD COLUMN provider_cost_estimate_cents INTEGER"),
+            ("provider_cost_actual_cents", "ALTER TABLE jobs ADD COLUMN provider_cost_actual_cents INTEGER"),
+            ("remote_worker_token_hash", "ALTER TABLE jobs ADD COLUMN remote_worker_token_hash TEXT"),
+        ]
+        for col, ddl in migrations:
+            if col not in cols:
+                await conn.exec_driver_sql(ddl)
+
 
 @asynccontextmanager
 async def session() -> AsyncIterator[AsyncSession]:
@@ -63,7 +135,7 @@ def _row_to_job(row: JobRow) -> Job:
     return Job(
         id=row.id,
         status=row.status,  # type: ignore[arg-type]
-        config=JobConfig.model_validate_json(row.config_json),
+        config=parse_job_config(row.config_json),
         uploads=json.loads(row.uploads_json),
         artifacts=[Artifact.model_validate(a) for a in json.loads(row.artifacts_json)],
         frames_total=row.frames_total,
@@ -73,18 +145,35 @@ def _row_to_job(row: JobRow) -> Job:
     )
 
 
-async def create_job(job: Job) -> None:
+def worker_identity() -> str:
+    """Stable-ish identifier for this worker process.
+
+    Combines hostname + PID so a human can map a claim back to a running
+    container in `docker compose ps`. Recomputed each call is fine; writes
+    go through sqlite anyway.
+    """
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+async def create_job(job: Job, worker_class: str = "lingbot") -> None:
+    # `execution_target` is mirrored from the config onto its own column so the
+    # dispatcher can filter by target without parsing config_json. Configs that
+    # predate the ExecutionFields mixin (gsplat-pre-R1, for instance) fall back
+    # to the column default ("local").
+    execution_target = getattr(job.config, "execution_target", "local")
     async with session() as s:
         row = JobRow(
             id=job.id,
             status=job.status,
-            config_json=job.config.model_dump_json(),
+            config_json=dump_job_config(job.config),
             uploads_json=json.dumps(job.uploads),
             artifacts_json=json.dumps([a.model_dump(mode="json") for a in job.artifacts]),
             frames_total=job.frames_total,
             error=job.error,
             created_at=job.created_at,
             updated_at=job.updated_at,
+            worker_class=worker_class,
+            execution_target=execution_target,
         )
         s.add(row)
         await s.commit()
@@ -129,6 +218,9 @@ async def list_jobs() -> list[JobSummary]:
         out: list[JobSummary] = []
         for row in rows:
             artifacts = json.loads(row.artifacts_json)
+            # Pre-refactor rows have no `processor` field — treat as lingbot.
+            cfg_raw = json.loads(row.config_json)
+            processor_id = cfg_raw.get("processor", "lingbot")
             out.append(
                 JobSummary(
                     id=row.id,
@@ -137,6 +229,7 @@ async def list_jobs() -> list[JobSummary]:
                     updated_at=row.updated_at,
                     frames_total=row.frames_total,
                     artifact_count=len(artifacts),
+                    processor=processor_id,
                 )
             )
         return out
@@ -150,3 +243,245 @@ async def delete_job(job_id: str) -> bool:
         await s.delete(row)
         await s.commit()
         return True
+
+
+# --- Queue ops ------------------------------------------------------------
+
+# Statuses that indicate a job is actively being processed by a worker and
+# therefore should participate in claim/orphan bookkeeping.
+RUNNING_STATUSES = frozenset({"queued", "ingest", "inference", "export", "slam", "meshing", "training"})
+
+
+async def claim_next_job(
+    worker_class: str, worker_id: Optional[str] = None
+) -> Optional[tuple[str, AnyJobConfig, list[str]]]:
+    """Atomically claim the next queued job for this worker class.
+
+    Returns `(job_id, config, upload_names)` on success, None if the queue is
+    empty. Uses a single transactional UPDATE keyed on status+worker_class so
+    two worker processes can't grab the same job.
+    """
+    if worker_id is None:
+        worker_id = worker_identity()
+    now = datetime.now(timezone.utc)
+
+    async with session() as s:
+        async with s.begin():
+            # BEGIN IMMEDIATE (via session.begin() nested) takes a write lock so
+            # no other worker can race us between SELECT and UPDATE.
+            row = (
+                await s.execute(
+                    select(JobRow)
+                    .where(JobRow.status == "queued")
+                    .where(JobRow.worker_class == worker_class)
+                    .where(JobRow.claimed_by.is_(None))
+                    .order_by(JobRow.created_at.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.claimed_by = worker_id
+            row.claimed_at = now
+            row.updated_at = now
+            # Status stays "queued" here; the processor bumps it to ingest /
+                # inference / etc as it progresses.
+            return (row.id, parse_job_config(row.config_json), json.loads(row.uploads_json))
+
+
+async def release_job(
+    job_id: str, *, worker_id: Optional[str] = None, requeue: bool = False
+) -> None:
+    """Clear this worker's claim on the job.
+
+    If `requeue=True`, also bumps status back to 'queued' so another worker
+    can pick it up (used on graceful shutdown mid-run). Otherwise just drops
+    the claim (used at the end of a run, after status is already terminal).
+    """
+    if worker_id is None:
+        worker_id = worker_identity()
+    now = datetime.now(timezone.utc)
+    async with session() as s:
+        async with s.begin():
+            row = await s.get(JobRow, job_id)
+            if row is None:
+                return
+            # Don't stomp on a claim that has since been taken by someone else
+            # (shouldn't happen, but we're paranoid about cross-process races).
+            if row.claimed_by and row.claimed_by != worker_id:
+                return
+            row.claimed_by = None
+            row.claimed_at = None
+            if requeue:
+                row.status = "queued"
+                row.cancel_requested = False
+            row.updated_at = now
+
+
+async def request_cancel(job_id: str) -> bool:
+    """Flip the cross-process cancel flag. Returns True if the row existed."""
+    now = datetime.now(timezone.utc)
+    async with session() as s:
+        async with s.begin():
+            row = await s.get(JobRow, job_id)
+            if row is None:
+                return False
+            row.cancel_requested = True
+            row.updated_at = now
+            return True
+
+
+async def is_cancel_requested(job_id: str) -> bool:
+    """Cheap read used by the worker-side cancel poller."""
+    async with session() as s:
+        row = await s.get(JobRow, job_id)
+        return bool(row and row.cancel_requested)
+
+
+async def sweep_stale_claims(stale_after_s: float) -> int:
+    """Reap claims whose claimed_at is older than `stale_after_s`.
+
+    A worker that died mid-job leaves its claim + running status behind. The
+    sweep flips those rows to `failed` with a clear error so the UI shows a
+    consistent state and the user can delete or restart. Returns the number
+    of rows reaped.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=stale_after_s)
+    reaped = 0
+    async with session() as s:
+        async with s.begin():
+            rows = (
+                await s.execute(
+                    select(JobRow)
+                    .where(JobRow.claimed_by.is_not(None))
+                    .where(JobRow.claimed_at < cutoff)
+                    .where(JobRow.status.in_(tuple(RUNNING_STATUSES)))
+                )
+            ).scalars().all()
+            for row in rows:
+                row.status = "failed"
+                row.error = (
+                    f"worker {row.claimed_by} vanished mid-run "
+                    f"(no heartbeat since {row.claimed_at.isoformat()}) — "
+                    "marked as orphaned. delete or restart."
+                )
+                row.claimed_by = None
+                row.claimed_at = None
+                row.updated_at = now
+                reaped += 1
+    return reaped
+
+
+async def set_provider_bookkeeping(
+    job_id: str,
+    *,
+    provider_instance_id: Optional[str] = None,
+    cost_estimate_cents: Optional[int] = None,
+    cost_actual_cents: Optional[int] = None,
+    token_hash: Optional[str] = None,
+) -> None:
+    """Write cloud-provider bookkeeping fields on the job row.
+
+    Only fields that are non-None get written; this is an upsert-style helper
+    so the dispatcher can record `provider_instance_id` at launch, then later
+    a billing sweeper can bump `cost_actual_cents` without clobbering the
+    launch-time estimate.
+    """
+    now = datetime.now(timezone.utc)
+    async with session() as s:
+        async with s.begin():
+            row = await s.get(JobRow, job_id)
+            if row is None:
+                return
+            if provider_instance_id is not None:
+                row.provider_instance_id = provider_instance_id
+            if cost_estimate_cents is not None:
+                row.provider_cost_estimate_cents = cost_estimate_cents
+            if cost_actual_cents is not None:
+                row.provider_cost_actual_cents = cost_actual_cents
+            if token_hash is not None:
+                row.remote_worker_token_hash = token_hash
+            row.updated_at = now
+
+
+async def get_cost_summary(job_id: str) -> Optional[dict]:
+    """Return a compact cost + provider-instance readout for `job_id`.
+
+    None if the job doesn't exist. Always returns fresh strings for
+    the provider + instance id fields so the frontend can render a
+    uniform cloud-badge + cost cell even for local jobs (where
+    everything is zero / null / "local"). The frontend polls this on a
+    30s debounce so keeping the query cheap matters.
+    """
+    async with session() as s:
+        row = await s.get(JobRow, job_id)
+        if row is None:
+            return None
+        elapsed_s: Optional[float] = None
+        if row.claimed_at is not None:
+            terminal = row.status in ("ready", "failed", "cancelled")
+            end = row.updated_at if terminal else datetime.now(timezone.utc)
+            elapsed_s = max(0.0, (end - row.claimed_at).total_seconds())
+        return {
+            "job_id": row.id,
+            "execution_target": row.execution_target,
+            "provider_instance_id": row.provider_instance_id,
+            "cost_estimate_cents": row.provider_cost_estimate_cents or 0,
+            "cost_actual_cents": row.provider_cost_actual_cents or 0,
+            "elapsed_s": elapsed_s,
+            "status": row.status,
+        }
+
+
+async def heartbeat(job_id: str, worker_id: Optional[str] = None) -> None:
+    """Bump claimed_at so the stale-claim sweep doesn't reap an active job.
+
+    Workers call this every N seconds inside their run loop. Cheap — a
+    single UPDATE by primary key.
+    """
+    if worker_id is None:
+        worker_id = worker_identity()
+    now = datetime.now(timezone.utc)
+    async with session() as s:
+        async with s.begin():
+            row = await s.get(JobRow, job_id)
+            if row is None or row.claimed_by != worker_id:
+                return
+            row.claimed_at = now
+
+
+async def count_queued(worker_class: Optional[str] = None) -> int:
+    """Number of jobs waiting in the queue. For health/metrics endpoints."""
+    async with session() as s:
+        stmt = select(JobRow).where(JobRow.status == "queued").where(JobRow.claimed_by.is_(None))
+        if worker_class is not None:
+            stmt = stmt.where(JobRow.worker_class == worker_class)
+        rows = (await s.execute(stmt)).scalars().all()
+        return len(rows)
+
+
+# Keep the sqlalchemy `text` import referenced for anyone who wants ad-hoc sql
+# from this module (e.g. a future admin endpoint).
+__all__ = [
+    "Base",
+    "JobRow",
+    "RUNNING_STATUSES",
+    "claim_next_job",
+    "count_queued",
+    "create_job",
+    "delete_job",
+    "get_job",
+    "heartbeat",
+    "init_store",
+    "is_cancel_requested",
+    "list_jobs",
+    "release_job",
+    "request_cancel",
+    "session",
+    "set_provider_bookkeeping",
+    "sweep_stale_claims",
+    "text",
+    "update_job",
+    "worker_identity",
+]

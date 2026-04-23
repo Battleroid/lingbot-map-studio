@@ -1,6 +1,13 @@
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+### Shared base image for the studio API + worker containers.
+###
+### Phase 2 splits the single "worker" image into one API + three workers
+### (lingbot, slam, gs). They all share the FastAPI surface, the SQLAlchemy
+### store, and the `app` python package — only the native/CUDA/torch deps
+### differ. Everything that the API *and* every worker both need lives here.
+###
+### Build: `docker build -t lingbot-studio/base:latest -f worker/Dockerfile.base worker`
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04 AS base
 
-ARG USE_FLASHINFER=0
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,11 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# PyTorch 2.9.1 + cu128 — must match lingbot-map upstream.
-RUN pip install --index-url https://download.pytorch.org/whl/cu128 \
-        "torch==2.9.1" "torchvision==0.24.1"
-
-# Core API + infra deps.
+# Shared API + queue + DB deps. Torch is *not* here — each worker image
+# installs its own pinned torch/CUDA matrix.
 RUN pip install \
         "fastapi==0.118.0" \
         "uvicorn[standard]==0.32.0" \
@@ -39,22 +43,11 @@ RUN pip install \
         "sqlalchemy[asyncio]==2.0.36" \
         "aiofiles==24.1.0" \
         "numpy<2.3" \
-        "pymeshlab==2023.12.post3" \
         "huggingface_hub==0.26.2"
-
-# lingbot-map (with vis extras: viser/trimesh/onnxruntime for sky mask + glb export).
-RUN pip install "lingbot-map[vis] @ git+https://github.com/Robbyant/lingbot-map.git"
-
-# Optional FlashInfer (paged-KV attention). Skip when USE_FLASHINFER=0 (SDPA fallback).
-RUN if [ "$USE_FLASHINFER" = "1" ]; then \
-        pip install flashinfer-python -i https://flashinfer.ai/whl/cu128/torch2.9/ ; \
-    fi
 
 WORKDIR /app
 COPY pyproject.toml ./
 COPY app ./app
 RUN pip install -e .
 
-EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Each derived image overrides CMD.

@@ -5,142 +5,188 @@ import logging
 import traceback
 from pathlib import Path
 
-from app.config import settings
+from app.cloud import JobSource, LocalJobSource
 from app.jobs import cancel as cancel_mod
 from app.jobs import store
-from app.jobs.cancel import JobCancelled
-from app.jobs.events import bus
-from app.jobs.schema import Artifact, JobConfig, JobEvent
-from app.pipeline.checkpoints import ensure_checkpoint
-from app.pipeline.export import export_reconstruction
-from app.pipeline.ingest import concat_videos_to_frames
-from app.pipeline.inference import run_inference
-from app.pipeline.watchdog import VramLimitExceeded, VramWatchState, run_vram_watchdog
+from app.jobs.cancel import CancelToken, JobCancelled
+from app.jobs.schema import AnyJobConfig, JobEvent, JobStatus
+from app.pipeline.watchdog import VramLimitExceeded
+from app.processors import resolve
+from app.processors.base import JobContext
 
 log = logging.getLogger(__name__)
 
 
-async def _publish(event: JobEvent) -> JobEvent:
-    return await bus.publish(event)
+# How often each running worker bumps `claimed_at` on its job row. The stale-
+# claim sweep uses ~3× this to decide a worker has vanished.
+HEARTBEAT_INTERVAL_S = 10.0
+
+# How often the runner polls the cancel flag through the job source. Lower
+# than `HEARTBEAT_INTERVAL_S` so cancel feels snappy even over HTTP.
+CANCEL_POLL_INTERVAL_S = 0.5
+
+# How often the runner asks the source to push any new/changed artifact
+# files to the studio. Only does work for `HttpJobSource`; local source
+# skips as a no-op since the shared volume is the same thing. 1s keeps
+# live-preview `partial_NNN.ply` snapshots feeling immediate without
+# hammering the broker during an inference-bound stretch.
+ARTIFACT_SYNC_INTERVAL_S = 1.0
 
 
-async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
-    job_dir = settings.job_dir(job_id)
-    frames_dir = settings.job_frames(job_id)
-    artifacts_dir = settings.job_artifacts(job_id)
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+async def _heartbeat_loop(
+    source: JobSource, job_id: str, worker_id: str, interval_s: float
+) -> None:
+    try:
+        while True:
+            try:
+                await source.heartbeat(job_id, worker_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("heartbeat failed for %s: %s", job_id, exc)
+            await asyncio.sleep(interval_s)
+    except asyncio.CancelledError:
+        return
+
+
+async def _artifact_sync_loop(
+    source: JobSource, job_id: str, interval_s: float
+) -> None:
+    """Pump `source.sync_artifacts` on a short interval.
+
+    For remote sources, this is what makes live partial-snapshot
+    preview work: the processor writes `partial_007.ply` into
+    `ctx.artifacts_dir` and within ~1s it shows up on the studio
+    disk. For the local source, `sync_artifacts` is a no-op, so this
+    loop is cheap to leave on unconditionally.
+    """
+    try:
+        while True:
+            try:
+                await source.sync_artifacts(job_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("artifact sync failed for %s: %s", job_id, exc)
+            await asyncio.sleep(interval_s)
+    except asyncio.CancelledError:
+        return
+
+
+async def _cancel_watch_loop(
+    source: JobSource,
+    job_id: str,
+    token: CancelToken,
+    poll_interval_s: float,
+) -> None:
+    """Mirror the studio's cancel flag onto `token.cancelled`.
+
+    Replaces `cancel_mod.watch_cancel_flag` for the source-aware runner so
+    the same poll works for both local sqlite reads and HTTP long-polls.
+    """
+    try:
+        while not token.cancelled:
+            try:
+                if await source.is_cancel_requested(job_id):
+                    token.cancel("stopped by user")
+                    return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cancel-poller read failed for %s: %s", job_id, exc)
+            await asyncio.sleep(poll_interval_s)
+    except asyncio.CancelledError:
+        return
+
+
+async def run_job(
+    job_id: str,
+    uploads: list[Path],
+    config: AnyJobConfig,
+    *,
+    worker_id: str | None = None,
+    source: JobSource | None = None,
+) -> None:
+    """Run a single job to completion by dispatching to the processor matching
+    `config.processor`.
+
+    The runner owns state transitions, cancellation bookkeeping, and the
+    error-handling fan-out (OOM / cancelled / watchdog / general failure).
+    Processors are pure: they publish events, do work, and return the
+    artifacts they produced. All "talk to the studio" calls go through the
+    `JobSource` so the same runner executes both locally (LocalJobSource) and
+    against a remote broker (HttpJobSource, later slice).
+    """
+
+    if source is None:
+        source = LocalJobSource()
+
+    job_dir = source.job_dir(job_id)
+    frames_dir = source.frames_dir(job_id)
+    artifacts_dir = source.artifacts_dir(job_id)
+
+    if worker_id is None:
+        worker_id = store.worker_identity()
+
+    # Fresh in-memory token for this run. The in-process `_tokens` dict is
+    # still populated so code paths that have an existing handle (e.g. older
+    # tests) keep working, but the authoritative signal is the studio's
+    # cancel flag polled via the source.
     cancel_token = cancel_mod.get_token(job_id)
+    cancel_token.cancelled = False
+    cancel_token.reason = ""
 
-    def _check_cancel() -> None:
-        if cancel_token.cancelled:
-            raise JobCancelled(cancel_token.reason)
+    async def _publish(event: JobEvent) -> JobEvent:
+        return await source.publish_event(event)
+
+    async def _set_status(status: JobStatus) -> None:
+        await source.set_status(job_id, status)
+
+    async def _set_frames_total(frames_total: int) -> None:
+        await source.set_frames_total(job_id, frames_total)
+
+    ctx = JobContext(
+        job_id=job_id,
+        uploads=uploads,
+        config=config,
+        job_dir=job_dir,
+        frames_dir=frames_dir,
+        artifacts_dir=artifacts_dir,
+        cancel=cancel_token,
+        publish=_publish,
+        set_status=_set_status,
+        set_frames_total=_set_frames_total,
+    )
+
+    # Background helpers: mirror the studio's cancel flag onto the token,
+    # keep the claim fresh so the stale-sweep doesn't reap us mid-run, and
+    # (for remote sources) sync partial artifact snapshots up as they're
+    # written so the live-preview UX matches a local worker's.
+    cancel_watcher = asyncio.create_task(
+        _cancel_watch_loop(source, job_id, cancel_token, CANCEL_POLL_INTERVAL_S)
+    )
+    heartbeat_task = asyncio.create_task(
+        _heartbeat_loop(source, job_id, worker_id, HEARTBEAT_INTERVAL_S)
+    )
+    artifact_sync_task = asyncio.create_task(
+        _artifact_sync_loop(source, job_id, ARTIFACT_SYNC_INTERVAL_S)
+    )
 
     try:
-        await _publish(JobEvent(job_id=job_id, stage="queue", message="job starting"))
-        _check_cancel()
+        processor = resolve(config)
+        result = await processor.run(ctx)
 
-        # 1. ingest
-        await store.update_job(job_id, status="ingest")
-        frames_total = await concat_videos_to_frames(
-            job_id=job_id,
-            sources=uploads,
-            dest=frames_dir,
-            config=config,
-            publish=_publish,
-        )
-        await store.update_job(job_id, frames_total=frames_total)
-        _check_cancel()
-
-        # 2. checkpoint
-        ckpt = await ensure_checkpoint(config.model_id, job_id, _publish)
-        _check_cancel()
-
-        # 3. inference — spin up a VRAM watchdog alongside the GPU call.
-        await store.update_job(job_id, status="inference")
-        soft_limit = config.vram_soft_limit_gb or settings.vram_default_soft_limit_gb
-        vram_state = VramWatchState(soft_limit_gb=float(soft_limit))
-        watchdog_task = asyncio.create_task(
-            run_vram_watchdog(job_id, vram_state, _publish)
-        )
-        try:
-            predictions = await run_inference(
-                job_id=job_id,
-                frames_dir=frames_dir,
-                ckpt_path=ckpt,
-                config=config,
-                publish=_publish,
-                vram_state=vram_state,
-                cancel_token=cancel_token,
-            )
-        finally:
-            vram_state.stop()
-            try:
-                await asyncio.wait_for(watchdog_task, timeout=5.0)
-            except asyncio.TimeoutError:
-                watchdog_task.cancel()
-        _check_cancel()
-        await _publish(
-            JobEvent(
-                job_id=job_id,
-                stage="inference",
-                message=(
-                    f"vram peak {vram_state.peak_gb:.2f} GB "
-                    f"(soft limit {vram_state.soft_limit_gb:.1f} GB)"
-                ),
-                data={
-                    "vram_peak_gb": round(vram_state.peak_gb, 3),
-                    "vram_soft_limit_gb": vram_state.soft_limit_gb,
-                },
-            )
-        )
-
-        # 4. export
-        await store.update_job(job_id, status="export")
-        artifacts = await export_reconstruction(
-            job_id=job_id,
-            frames_dir=frames_dir,
-            artifacts_dir=artifacts_dir,
-            predictions=predictions,
-            config=config,
-            publish=_publish,
-        )
-
-        art_list = []
-        for name, path in artifacts.items():
-            art_list.append(
-                Artifact(
-                    name=path.name,
-                    kind=name,  # type: ignore[arg-type]
-                    size_bytes=path.stat().st_size,
-                )
-            )
-        # Also surface the cached predictions npz so the UI can see it.
-        npz = artifacts_dir / "predictions.npz"
-        if npz.exists():
-            art_list.append(
-                Artifact(
-                    name=npz.name,
-                    kind="npz",
-                    size_bytes=npz.stat().st_size,
-                )
-            )
-
-        await store.update_job(job_id, status="ready", artifacts=art_list)
+        await source.set_artifacts(job_id, result.artifacts)
+        await source.set_status(job_id, "ready")
         await _publish(
             JobEvent(
                 job_id=job_id,
                 stage="system",
                 message="job ready",
-                data={"artifacts": [a.name for a in art_list]},
+                data={
+                    "artifacts": [a.name for a in result.artifacts],
+                    **result.extras,
+                },
             )
         )
     except JobCancelled as exc:
         log.info("job %s cancelled: %s", job_id, exc)
-        await store.update_job(
-            job_id,
-            status="cancelled",
-            error=f"cancelled: {exc}",
-        )
+        await source.set_error(job_id, f"cancelled: {exc}")
+        await source.set_status(job_id, "cancelled")
         await _publish(
             JobEvent(
                 job_id=job_id,
@@ -151,10 +197,9 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
         )
     except VramLimitExceeded as exc:
         log.warning("job %s aborted by vram watchdog: %s", job_id, exc)
-        await store.update_job(
+        await source.set_error(
             job_id,
-            status="failed",
-            error=(
+            (
                 f"vram watchdog aborted the job: {exc}\n\n"
                 "try one of these:\n"
                 "  · apply the 'low-mem' preset\n"
@@ -164,6 +209,7 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 "  · lower image_size to 384"
             ),
         )
+        await source.set_status(job_id, "failed")
         await _publish(
             JobEvent(
                 job_id=job_id,
@@ -181,10 +227,9 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
         )
         if is_cuda_oom:
             log.warning("job %s failed with CUDA OOM", job_id)
-            await store.update_job(
+            await source.set_error(
                 job_id,
-                status="failed",
-                error=(
+                (
                     "CUDA out of memory during inference.\n\n"
                     "the sequence is too long for streaming mode at current "
                     "settings. try in this order:\n"
@@ -195,6 +240,7 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                     f"raw error: {exc}"
                 ),
             )
+            await source.set_status(job_id, "failed")
             await _publish(
                 JobEvent(
                     job_id=job_id,
@@ -204,16 +250,10 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                 )
             )
         else:
-            # Any other exception: log and mark failed with the full traceback
-            # so the UI shows it instead of silently leaving the job in
-            # whatever status it was when it crashed.
             log.exception("job %s failed", job_id)
             tb = traceback.format_exc()
-            await store.update_job(
-                job_id,
-                status="failed",
-                error=f"{type(exc).__name__}: {exc}\n\n{tb}",
-            )
+            await source.set_error(job_id, f"{type(exc).__name__}: {exc}\n\n{tb}")
+            await source.set_status(job_id, "failed")
             await _publish(
                 JobEvent(
                     job_id=job_id,
@@ -223,19 +263,43 @@ async def run_job(job_id: str, uploads: list[Path], config: JobConfig) -> None:
                     data={"traceback": tb},
                 )
             )
-    except Exception as exc:  # noqa: BLE001
-        log.exception("job %s failed", job_id)
-        tb = traceback.format_exc()
-        await store.update_job(job_id, status="failed", error=f"{exc}\n\n{tb}")
-        await _publish(
-            JobEvent(
-                job_id=job_id,
-                stage="system",
-                level="error",
-                message=f"job failed: {exc}",
-                data={"traceback": tb},
-            )
-        )
     finally:
+        # Stop background helpers before releasing the claim so a trailing
+        # heartbeat doesn't resurrect the claimed_at timestamp. The
+        # artifact syncer is stopped first + flushed once more so any
+        # final `partial_*` snapshot the processor wrote on its way out
+        # reaches the studio before we tear down.
+        if not artifact_sync_task.done():
+            artifact_sync_task.cancel()
+        try:
+            await asyncio.wait_for(artifact_sync_task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        try:
+            await source.sync_artifacts(job_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("final artifact sync failed for %s: %s", job_id, exc)
+
+        for task in (cancel_watcher, heartbeat_task):
+            if not task.done():
+                task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                pass
+
         cancel_mod.drop_token(job_id)
-        await bus.close(job_id)
+        try:
+            await source.release(job_id, worker_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("failed to release claim for %s: %s", job_id, exc)
+        await source.close_events(job_id)
+
+
+def pick_cancel_token(job_id: str) -> CancelToken:
+    """Helper for tests / legacy call sites that want the in-process token.
+
+    Prefer `store.request_cancel(job_id)` from anywhere except a thread that
+    is already running this job's pipeline.
+    """
+    return cancel_mod.get_token(job_id)

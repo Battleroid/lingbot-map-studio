@@ -1,0 +1,29 @@
+### Lingbot worker.
+###
+### Runs dense-pointmap inference using upstream `lingbot-map` (torch 2.9.1
+### + CUDA 12.8). This is the old single-container's raison d'être — split
+### out so other worker classes can pin their own torch/CUDA wheels.
+###
+### Build: `docker build -t lingbot-studio/worker-lingbot:latest --build-arg USE_FLASHINFER=0 -f worker/Dockerfile.lingbot worker`
+ARG BASE_IMAGE=lingbot-studio/base:latest
+FROM ${BASE_IMAGE}
+
+ARG USE_FLASHINFER=0
+ENV WORKER_CLASS=lingbot
+
+# PyTorch 2.9.1 + cu128 — must match lingbot-map upstream.
+RUN pip install --index-url https://download.pytorch.org/whl/cu128 \
+        "torch==2.9.1" "torchvision==0.24.1"
+
+# Mesh/export libs used by the lingbot exporter.
+RUN pip install "pymeshlab==2023.12.post3" "trimesh==4.4.1"
+
+# lingbot-map (with vis extras: viser/trimesh/onnxruntime for sky mask + glb export).
+RUN pip install "lingbot-map[vis] @ git+https://github.com/Robbyant/lingbot-map.git"
+
+# Optional FlashInfer (paged-KV attention). Skip when USE_FLASHINFER=0 (SDPA fallback).
+RUN if [ "$USE_FLASHINFER" = "1" ]; then \
+        pip install flashinfer-python -i https://flashinfer.ai/whl/cu128/torch2.9/ ; \
+    fi
+
+CMD ["python", "-m", "app.worker_main", "--worker-class", "lingbot"]
