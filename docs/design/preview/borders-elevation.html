@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Borders & Elevation</title>
+<link rel="stylesheet" href="_frame.css"></head>
+<body><div class="card dithered">
+  <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px">
+    <div style="background:#fff; border:1px solid #000; padding:10px">
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; background:#000; color:#fff; margin:-10px -10px 8px; padding:5px 10px">PANEL</div>
+      <div class="mono-small">1px fg rule · no radius · no shadow</div>
+    </div>
+    <div style="background:#fff; border:1px dashed #000; padding:16px 10px; text-align:center">
+      <div style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase">DROPZONE</div>
+      <div class="mono-small">1px dashed fg</div>
+    </div>
+    <div style="background:#000; color:#fff; padding:10px; box-shadow: 0 2px 0 #000">
+      <div style="font-size:11px; letter-spacing:0.08em">TOOLTIP ::after</div>
+      <div style="font-size:11px; opacity:0.7">box-shadow: 0 2px 0 fg · sharp offset only</div>
+    </div>
+  </div>
+  <div class="mono-small" style="margin-top:10px; background:#fff; padding:4px 6px; display:inline-block; border:1px solid #000">radii · 0 always · elevation expressed as rules, inversions, or 1-step offsets</div>
+</div></body></html>

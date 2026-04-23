@@ -87,6 +87,14 @@ body {
   min-height: 100vh;
 }
 
+/* Buttons — redesign-v1 makes the four states glanceable:
+     resting — white fill, 1px rule, fg text (unchanged)
+     hover   — thin diagonal hatch over white, 2px inset rule, offset outline
+               (reads as "targetable" without being committed)
+     pressed — inverted black fill with an inset bevel (reads as "held")
+     active  — same as pressed; for radio-style mode/backend pickers that
+               persist the selection via data-pressed
+     disabled — dashed rule + diagonal hatch fill + muted text */
 button {
   font: inherit;
   font-size: var(--fs-sm);
@@ -98,23 +106,52 @@ button {
   text-transform: lowercase;
   letter-spacing: 0.02em;
   line-height: 1.2;
+  position: relative;
 }
 
-button:hover:not(:disabled) {
-  background: var(--fg);
+button:hover:not(:disabled):not([data-pressed="true"]) {
+  background-color: var(--bg);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--fg) 0,
+    var(--fg) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+  color: var(--fg);
+  box-shadow: inset 0 0 0 2px var(--fg);
+  outline: 1px solid var(--fg);
+  outline-offset: 2px;
+}
+
+button:active:not(:disabled) {
+  background-color: var(--fg);
+  background-image: none;
   color: var(--bg);
+  box-shadow: inset 2px 2px 0 #3a3a3a;
+  outline: none;
+}
+
+button[data-pressed="true"]:not(:disabled) {
+  background-color: var(--fg);
+  background-image: none;
+  color: var(--bg);
+  box-shadow: inset 2px 2px 0 #3a3a3a;
+  outline: none;
 }
 
 button:disabled {
   color: var(--muted);
-  border-color: var(--muted);
+  border: 1px dashed var(--muted);
+  background-color: var(--bg);
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--bg) 0 4px,
+    #ededed 4px 8px
+  );
   cursor: not-allowed;
-  background: var(--bg);
-}
-
-button[data-pressed="true"] {
-  background: var(--fg);
-  color: var(--bg);
+  box-shadow: none;
+  outline: none;
 }
 
 input[type="text"],
@@ -294,6 +331,59 @@ hr,
 
 .panel-body .stat input[type="checkbox"] {
   width: auto;
+}
+
+/* Full-width form input (redesign-v1). Opt-in via `.form-row` / `.form-input`
+   for cases where the tight `.stat` 90px column isn't enough — long text
+   fields, credential paste dialogs, full-width search boxes. Bumps font to
+   13px and padding to 6×10 for readability; keeps the 1px rule + zero
+   radius + mono face aesthetic. */
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.form-row .form-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.form-input,
+input.form-input,
+select.form-input,
+textarea.form-input {
+  font: inherit;
+  font-size: var(--fs-md);
+  font-family: var(--font-mono);
+  width: 100%;
+  border: 1px solid var(--rule);
+  background: var(--bg);
+  padding: 6px 10px;
+  line-height: 1.3;
+  color: var(--fg);
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 0;
+}
+select.form-input {
+  background-image: linear-gradient(
+      45deg,
+      transparent 50%,
+      var(--fg) 50%
+    ),
+    linear-gradient(135deg, var(--fg) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 9px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 26px;
+}
+.form-input:focus {
+  outline: 2px solid var(--fg);
+  outline-offset: 1px;
 }
 
 .panel-body button {
@@ -979,6 +1069,228 @@ table.dtable tr:last-child td {
   }
 }
 
+/* ─── Stage list (redesign-v1, table variant) ──────────────────────
+   Replaces the flex `.stage-list` rendering in JobStatusStrip. The
+   stages render as a ruled table so the stage-name column visually
+   ties to its progress + elapsed columns, with dotted leaders pulling
+   the eye across. The active row's leader + mini bar march in sync.
+   The legacy `.stage-line` styles above are kept for back-compat —
+   nothing else in the tree uses them yet, but the design-system
+   preview cards reference them so we don't break that visual. */
+.sl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.sl-table th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  padding: 2px 8px 4px;
+  border-bottom: 1px solid var(--rule);
+}
+.sl-table th.num {
+  text-align: right;
+}
+.sl-table td {
+  padding: 3px 8px;
+  vertical-align: middle;
+  line-height: 1.3;
+}
+.sl-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sl-table tbody tr {
+  border-left: 2px solid transparent;
+}
+.sl-table tbody tr:nth-child(even) td {
+  background: #fafafa;
+}
+
+/* glyph column renders the same four states as the legacy stage-line */
+.sl-table .sl-glyph {
+  width: 14px;
+  display: inline-block;
+  text-align: center;
+}
+
+/* name column gets dotted leaders that pull the eye to the numbers */
+.sl-table .sl-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.sl-table .sl-name .leader {
+  flex: 1;
+  height: 1px;
+  background-image: linear-gradient(
+    to right,
+    #bbb 0 2px,
+    transparent 2px 6px
+  );
+  background-size: 6px 1px;
+  background-repeat: repeat-x;
+  background-position: 0 50%;
+}
+
+/* per-state styling */
+.sl-table tr[data-state="done"] td {
+  color: var(--fg);
+}
+.sl-table tr[data-state="done"] {
+  border-left-color: #c8c8c8;
+}
+.sl-table tr[data-state="done"] .sl-glyph {
+  color: var(--fg);
+}
+
+.sl-table tr[data-state="active"] td {
+  color: var(--fg);
+  background: #f1f1f1 !important;
+}
+.sl-table tr[data-state="active"] {
+  border-left-color: var(--fg);
+}
+.sl-table tr[data-state="active"] .sl-glyph::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  background: var(--fg);
+  border-radius: 50%;
+  animation: sl-pulse 1.1s ease-in-out infinite;
+}
+.sl-table tr[data-state="active"] .sl-name .leader {
+  background-image: linear-gradient(
+    to right,
+    #000 0 3px,
+    transparent 3px 6px
+  );
+  animation: sl-march 0.9s linear infinite;
+}
+
+.sl-table tr[data-state="pending"] td {
+  color: #9a9a9a;
+}
+.sl-table tr[data-state="pending"] .sl-glyph {
+  color: #9a9a9a;
+}
+.sl-table tr[data-state="pending"] .sl-name .leader {
+  background-image: linear-gradient(
+    to right,
+    #d8d8d8 0 2px,
+    transparent 2px 6px
+  );
+}
+
+.sl-table tr[data-state="failed"] td {
+  color: var(--danger);
+}
+.sl-table tr[data-state="failed"] {
+  border-left-color: var(--danger);
+}
+
+@keyframes sl-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.5;
+  }
+}
+@keyframes sl-march {
+  0% {
+    background-position: 0 50%;
+  }
+  100% {
+    background-position: 6px 50%;
+  }
+}
+
+/* inline mini progress bar sitting next to the percentage */
+.sl-mini {
+  display: inline-block;
+  width: 52px;
+  height: 4px;
+  border: 1px solid var(--rule);
+  background: var(--soft);
+  vertical-align: middle;
+  margin-right: 6px;
+  position: relative;
+}
+.sl-mini > span {
+  display: block;
+  height: 100%;
+  background: var(--fg);
+}
+.sl-table tr[data-state="active"] .sl-mini > span {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    #000 0 3px,
+    #3a3a3a 3px 6px
+  );
+  background-size: 8.48px 8.48px;
+  animation: sl-march 0.9s linear infinite;
+}
+
+/* websocket status pill — muted gray, blinks while connecting/open */
+.ws-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 2px 6px;
+  border: 1px solid #c8c8c8;
+}
+.ws-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: ws-blink 1.6s ease-in-out infinite;
+}
+.ws-pill[data-status="closed"] .dot {
+  animation: none;
+  background: var(--danger);
+}
+@keyframes ws-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* dashed footer rule under the stages table */
+.sl-footer {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed #c8c8c8;
+}
+.sl-footer b {
+  color: var(--fg);
+  font-weight: 500;
+}
+
 .status-cell:last-child {
   border-right: none;
 }
@@ -1124,6 +1436,17 @@ table.dtable tr:last-child td {
   }
 }
 
+/* Progress bar — state is encoded in the fill, not just the width.
+   Variants map to the live job states:
+     resting      — empty track (default)
+     active       — diagonal marching hatch over the filled portion
+     indeterminate — ping-pong hatched block across the track
+     paused       — dashed rule + muted gray fill
+     failed       — blood-red hatch on a tinted track
+     done         — solid fill with a ✓ terminator
+   Redesign-v1 swapped the old `.pb.indeterminate` translateX animation
+   for a hatched ping-pong; callers passing the old class get the new
+   look automatically. */
 .pb {
   height: 8px;
   border: 1px solid var(--rule);
@@ -1138,18 +1461,94 @@ table.dtable tr:last-child td {
   transition: width 200ms linear;
 }
 
-.pb.indeterminate > .fill {
-  width: 30%;
-  animation: pb-stripe 1.2s linear infinite;
+/* active — marching diagonal hatch painted onto the filled region */
+.pb.active > .fill {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    #000 0,
+    #000 6px,
+    #3a3a3a 6px,
+    #3a3a3a 12px
+  );
+  background-size: 16.97px 16.97px;
+  animation: pb-march 0.9s linear infinite;
 }
 
-@keyframes pb-stripe {
+@keyframes pb-march {
   0% {
-    transform: translateX(-50%);
+    background-position: 0 0;
   }
   100% {
-    transform: translateX(333%);
+    background-position: 16.97px 0;
   }
+}
+
+/* indeterminate — fixed-width hatched block ping-ponging across the track */
+.pb.indeterminate > .fill,
+.pb.indet > .fill {
+  width: 32%;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    #000 0,
+    #000 6px,
+    #3a3a3a 6px,
+    #3a3a3a 12px
+  );
+  background-size: 16.97px 16.97px;
+  animation:
+    pb-march 0.9s linear infinite,
+    pb-pingpong 1.4s ease-in-out infinite;
+}
+
+@keyframes pb-pingpong {
+  0%,
+  100% {
+    transform: translateX(-10%);
+  }
+  50% {
+    transform: translateX(220%);
+  }
+}
+
+/* paused — halted; dashed track border + dashed trailing edge + muted shade */
+.pb.paused {
+  border-style: dashed;
+  background: #ececec;
+}
+.pb.paused > .fill {
+  background: var(--muted);
+  border-right: 1px dashed var(--rule);
+}
+
+/* failed — blood-red hatch on a tinted track */
+.pb.failed {
+  border-color: var(--danger);
+  background: #f4e3e3;
+}
+.pb.failed > .fill {
+  background-color: var(--danger);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    #8a0000 0,
+    #8a0000 4px,
+    #6a0000 4px,
+    #6a0000 8px
+  );
+}
+
+/* done — solid fill with a terminating ✓ */
+.pb.done > .fill {
+  background: var(--fg);
+}
+.pb.done::after {
+  content: "✓";
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--bg);
+  font-family: var(--font-mono);
 }
 
 .kv-row {

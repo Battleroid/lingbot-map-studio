@@ -65,18 +65,9 @@ const PROVIDER_FIELDS: Record<string, { key: string; label: string; type: "text"
   ],
 };
 
-// Comfortable padded inputs — avoids the 90px .stat clamp and the
-// default 12px panel font size so long keys are readable as pasted.
-const INPUT_STYLE: CSSProperties = {
-  width: "100%",
-  padding: "8px 10px",
-  fontSize: "var(--fs-sm)",
-  fontFamily: "var(--font-mono, ui-monospace, monospace)",
-  boxSizing: "border-box",
-};
-
+// Textarea needs a little extra vertical room on top of what the shared
+// `.form-input` class provides; everything else comes from the class.
 const TEXTAREA_STYLE: CSSProperties = {
-  ...INPUT_STYLE,
   resize: "vertical",
   minHeight: 120,
 };
@@ -167,13 +158,11 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
             tab. closes with the tab, never written to disk.
           </div>
           {fields.map((f) => (
-            <label
-              key={f.key}
-              style={{ display: "grid", gap: 4, width: "100%" }}
-            >
-              <span>{f.label}</span>
+            <label key={f.key} className="form-row">
+              <span className="form-label">{f.label}</span>
               {f.type === "textarea" ? (
                 <textarea
+                  className="form-input"
                   rows={6}
                   value={values[f.key] ?? ""}
                   placeholder={f.placeholder}
@@ -184,12 +173,12 @@ export function CloudCredentialsDialog({ provider, onClose, onSaved }: Props) {
                 />
               ) : (
                 <input
+                  className="form-input"
                   type={f.type}
                   value={values[f.key] ?? ""}
                   placeholder={f.placeholder}
                   autoComplete="off"
                   spellCheck={false}
-                  style={INPUT_STYLE}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, [f.key]: e.target.value }))
                   }

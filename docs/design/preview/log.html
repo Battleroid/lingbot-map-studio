@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Log Lines</title>
+<link rel="stylesheet" href="_frame.css"></head>
+<body><div class="card">
+  <div style="background:#fff; border:1px solid #000; padding:8px 10px; font-size:11px; line-height:1.35; white-space:pre-wrap">
+<div style="color:#000"><span style="color:var(--muted)">[00:00:04]</span> ingest · ffmpeg -hwaccel cuda -i clip.mp4 -vf fps=6 frames/%06d.jpg</div>
+<div style="color:var(--muted)"><span style="color:var(--muted)">[00:00:11]</span> stderr · frame=  184 fps=54 q=-1.0 size=    2816kB time=00:00:30.67 bitrate= 752.1kbits/s</div>
+<div style="color:#000; background:#f4f4f4"><span style="color:var(--muted)">[00:00:14]</span> warn · keyframe_interval=1 will grow KV cache rapidly — consider 2</div>
+<div style="color:#000"><span style="color:var(--muted)">[00:00:18]</span> preproc · osd-mask · sampled 120 frames · std threshold 5.0 · dilate 2</div>
+<div style="color:#8a0000"><span style="color:#8a0000">[00:00:32]</span> error · torch.cuda.OutOfMemoryError: Tried to allocate 2.42 GiB</div>
+  </div>
+  <div class="mono-small" style="margin-top:6px">levels: info · stdout · stderr (muted) · warn (soft bg) · error (danger) · debug (muted)</div>
+</div></body></html>
