@@ -38,9 +38,10 @@
   }
 
   /* per-state styling */
-  tr[data-state="done"] td    { color:#000; }
-  tr[data-state="done"]       { border-left-color: #c8c8c8; }
-  tr[data-state="done"] .sl-glyph { color:#000; }
+  tr[data-state="done"] td    { color:#2b5a2b; }
+  tr[data-state="done"]       { border-left-color: #2b5a2b; }
+  tr[data-state="done"] .sl-glyph { color:#2b5a2b; }
+  tr[data-state="done"] .sl-name { color:#2b5a2b; }
 
   tr[data-state="active"] td  { color:#000; background:#f1f1f1 !important; }
   tr[data-state="active"]     { border-left-color:#000; }
@@ -68,15 +69,23 @@
     background-image: linear-gradient(to right, #d8d8d8 0 2px, transparent 2px 6px);
   }
 
-  /* inline progress pill sitting next to the percentage */
+  /* progress column layout — bar (fixed width) + pct (fixed width, right-aligned) */
+  .sl-prog {
+    display: inline-grid;
+    grid-template-columns: 52px 36px;
+    column-gap: 8px;
+    align-items: center;
+  }
   .sl-mini {
-    display:inline-block; width:52px; height:4px;
-    border:1px solid #000; background:#f4f4f4;
-    vertical-align:middle; margin-right:6px; position:relative;
+    width: 52px; height: 4px;
+    border: 1px solid #000; background: #f4f4f4;
+    position: relative;
   }
   .sl-mini > span {
     display:block; height:100%; background:#000;
   }
+  .sl-pct { text-align: right; font-variant-numeric: tabular-nums; }
+  .sl-empty { color: var(--muted); }
   tr[data-state="active"] .sl-mini > span {
     background-image: repeating-linear-gradient(-45deg, #000 0 3px, #3a3a3a 3px 6px);
     background-size: 8.48px 8.48px;
@@ -115,7 +124,7 @@
         <tr>
           <th style="width:18px"></th>
           <th>stage</th>
-          <th class="num" style="width:120px">progress</th>
+          <th class="num" style="width:110px">progress</th>
           <th class="num" style="width:72px">elapsed</th>
         </tr>
       </thead>
@@ -123,32 +132,32 @@
         <tr data-state="done">
           <td><span class="sl-glyph">✓</span></td>
           <td><span class="sl-name">ingest<span class="leader"></span></span></td>
-          <td class="num"><span class="sl-mini"><span style="width:100%"></span></span>100%</td>
+          <td class="num"><span class="sl-prog"><span class="sl-mini"><span style="width:100%"></span></span><span class="sl-pct">100%</span></span></td>
           <td class="num">4.2s</td>
         </tr>
         <tr data-state="done">
           <td><span class="sl-glyph">✓</span></td>
           <td><span class="sl-name">preproc<span class="leader"></span></span></td>
-          <td class="num"><span class="sl-mini"><span style="width:100%"></span></span>100%</td>
+          <td class="num"><span class="sl-prog"><span class="sl-mini"><span style="width:100%"></span></span><span class="sl-pct">100%</span></span></td>
           <td class="num">18.0s</td>
         </tr>
         <tr data-state="active">
           <td><span class="sl-glyph"></span></td>
           <td><span class="sl-name">inference<span class="leader"></span></span></td>
-          <td class="num"><span class="sl-mini"><span style="width:64%"></span></span>64%</td>
+          <td class="num"><span class="sl-prog"><span class="sl-mini"><span style="width:64%"></span></span><span class="sl-pct">64%</span></span></td>
           <td class="num">01:12</td>
         </tr>
         <tr data-state="pending">
           <td><span class="sl-glyph">·</span></td>
           <td><span class="sl-name">meshing<span class="leader"></span></span></td>
-          <td class="num">—</td>
-          <td class="num">—</td>
+          <td class="num"><span class="sl-prog"><span class="sl-mini"></span><span class="sl-pct sl-empty">—</span></span></td>
+          <td class="num sl-empty">—</td>
         </tr>
         <tr data-state="pending">
           <td><span class="sl-glyph">·</span></td>
           <td><span class="sl-name">export<span class="leader"></span></span></td>
-          <td class="num">—</td>
-          <td class="num">—</td>
+          <td class="num"><span class="sl-prog"><span class="sl-mini"></span><span class="sl-pct sl-empty">—</span></span></td>
+          <td class="num sl-empty">—</td>
         </tr>
       </tbody>
     </table>

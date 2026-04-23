@@ -54,10 +54,12 @@
   --muted:   #5c5c5c;   /* secondary text, pending stages, tip labels */
   --rule:    #000000;   /* 1px borders — ALWAYS the same as fg */
 
-  /* The only hue in the palette. Used sparingly: failed jobs, vram limit
-     marker, error copy. Do not introduce greens/yellows — status is
-     communicated by shape + placement + the chip colour map, not new hues. */
+  /* The only hues in the palette. Used sparingly: failed jobs, vram limit
+     marker, error copy (danger); ready/completed jobs, finished stages,
+     success confirmations (ok). Do not introduce additional hues — all
+     other status is communicated by shape + placement + the chip colour map. */
   --danger:  #8a0000;
+  --ok:      #2b5a2b;   /* deep forest — completed / ready / success */
 
   /* Dither tones — classic 50% 2x2 checker. Rendered inline-SVG so it
      stays crisp on retina (shape-rendering: crispEdges). */

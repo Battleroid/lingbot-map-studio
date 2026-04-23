@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Three Accents</title>
+<link rel="stylesheet" href="_frame.css">
+<script src="../three-tiles/three.min.js"></script>
+<style>
+  .ta-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; }
+  .ta-cell { border:1px solid #000; background:#fff; padding:8px; display:flex; flex-direction:column; gap:6px; align-items:center; }
+  .ta-cell canvas { width:100%; height:86px; display:block; }
+  .ta-tag { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
+  .ta-row2 { grid-template-columns: repeat(4, 1fr); }
+  .ta-row3 { grid-template-columns: repeat(5, 1fr); }
+  .ta-row3 .ta-cell canvas { height:48px; }
+  h4 { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin:12px 0 6px; font-weight:500; }
+</style>
+</head>
+<body><div class="card">
+  <div class="section-title" style="margin-bottom:4px">three.js accents · monochrome, capped 24fps</div>
+
+  <h4>mode tiles</h4>
+  <div class="ta-grid">
+    <div class="ta-cell"><canvas data-tile="lingbot"></canvas><span class="ta-tag">lingbot · dense cloud</span></div>
+    <div class="ta-cell"><canvas data-tile="slam"></canvas><span class="ta-tag">slam · pose graph + frustum</span></div>
+    <div class="ta-cell"><canvas data-tile="gsplat"></canvas><span class="ta-tag">gsplat · gaussians bloom</span></div>
+  </div>
+
+  <h4>slam backend tiles</h4>
+  <div class="ta-grid ta-row2">
+    <div class="ta-cell"><canvas data-tile="mast3r"></canvas><span class="ta-tag">mast3r_slam</span></div>
+    <div class="ta-cell"><canvas data-tile="droid"></canvas><span class="ta-tag">droid_slam · flow</span></div>
+    <div class="ta-cell"><canvas data-tile="dpvo"></canvas><span class="ta-tag">dpvo · patches</span></div>
+    <div class="ta-cell"><canvas data-tile="monogs"></canvas><span class="ta-tag">monogs · direct splat</span></div>
+  </div>
+
+  <h4>stage glyphs (24px inline)</h4>
+  <div class="ta-grid ta-row3">
+    <div class="ta-cell"><canvas data-tile="stage_ingest"></canvas><span class="ta-tag">ingest</span></div>
+    <div class="ta-cell"><canvas data-tile="stage_preproc"></canvas><span class="ta-tag">preproc</span></div>
+    <div class="ta-cell"><canvas data-tile="stage_inference"></canvas><span class="ta-tag">inference</span></div>
+    <div class="ta-cell"><canvas data-tile="stage_meshing"></canvas><span class="ta-tag">meshing</span></div>
+    <div class="ta-cell"><canvas data-tile="stage_export"></canvas><span class="ta-tag">export</span></div>
+  </div>
+</div>
+<script src="../three-tiles/three-tiles.js"></script>
+<script>ThreeTiles.attachAll();</script>
+</body></html>

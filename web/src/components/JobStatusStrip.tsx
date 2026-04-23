@@ -2,9 +2,22 @@
 
 import { useEffect, useState } from "react";
 
+import { ThreeTile, type TileId } from "@/components/ThreeTile";
 import { getJobCost } from "@/lib/api";
 import { type JobStatusDerived, type StageState } from "@/hooks/useJobStatus";
 import type { JobStatus, ProviderCostReadout } from "@/lib/types";
+
+// Map pipeline stage names to the ThreeTile glyph factory name. When a
+// stage transitions to "active", we render its 14px tile inline in the
+// glyph column — only the active row pays the render cost. Stages not
+// listed here fall back to the CSS-drawn pulsing dot.
+const STAGE_TILES: Record<string, TileId> = {
+  ingest: "stage_ingest",
+  preproc: "stage_preproc",
+  inference: "stage_inference",
+  meshing: "stage_meshing",
+  export: "stage_export",
+};
 
 interface Props {
   derived: JobStatusDerived;
@@ -32,16 +45,16 @@ function StageRow({ stage }: { stage: StageState }) {
   else if (stage.state === "active")
     pct = stage.latest_progress !== null ? stage.latest_progress : null;
 
-  // Right-column copy. Active rows lead with the mini bar + pct; done/failed
-  // rows show their duration; pending rows get a dash.
+  // Right-column layout. Fixed 52px bar + 36px right-aligned percentage
+  // inside `.sl-prog` so the bar never shifts as the pct widens from —
+  // to 100%. done/failed rows show their duration; pending rows get
+  // dashes in both slots.
   let progressCell: React.ReactNode;
   if (stage.state === "done" || stage.state === "active") {
     const pctLabel =
-      pct === null
-        ? "…"
-        : `${Math.round(pct * 100)}%`;
+      pct === null ? "…" : `${Math.round(pct * 100)}%`;
     progressCell = (
-      <>
+      <span className="sl-prog">
         <span className="sl-mini">
           <span
             style={{
@@ -49,13 +62,23 @@ function StageRow({ stage }: { stage: StageState }) {
             }}
           />
         </span>
-        {pctLabel}
-      </>
+        <span className="sl-pct">{pctLabel}</span>
+      </span>
     );
   } else if (stage.state === "failed") {
-    progressCell = "failed";
+    progressCell = (
+      <span className="sl-prog">
+        <span className="sl-mini" />
+        <span className="sl-pct">failed</span>
+      </span>
+    );
   } else {
-    progressCell = "—";
+    progressCell = (
+      <span className="sl-prog">
+        <span className="sl-mini" />
+        <span className="sl-pct sl-empty">—</span>
+      </span>
+    );
   }
 
   const elapsedCell =
@@ -67,22 +90,41 @@ function StageRow({ stage }: { stage: StageState }) {
         ? "…"
         : "—";
 
-  // Active rows have a CSS-drawn pulsing dot (::before); every other
-  // state renders its glyph as literal content so the column aligns
-  // cleanly regardless of whether a ::before kicked in.
-  const glyph =
-    stage.state === "done"
-      ? "✓"
-      : stage.state === "failed"
-        ? "✕"
-        : stage.state === "active"
-          ? ""
-          : "·";
+  // Glyph column. Active rows ideally render a tiny three.js tile for
+  // the stage (spinning reel for ingest, scanline sweep for preproc,
+  // etc.); if the stage name isn't mapped we fall back to the CSS
+  // pulsing dot. Done/failed/pending render their literal glyph.
+  const activeTile =
+    stage.state === "active" ? STAGE_TILES[stage.name] ?? null : null;
+  let glyphContent: React.ReactNode;
+  if (activeTile) {
+    glyphContent = (
+      <ThreeTile
+        tile={activeTile}
+        height={14}
+        className="sl-tile"
+        style={{ height: 14, width: 14 }}
+      />
+    );
+  } else if (stage.state === "done") {
+    glyphContent = "✓";
+  } else if (stage.state === "failed") {
+    glyphContent = "✕";
+  } else if (stage.state === "active") {
+    // unknown stage — blank, CSS draws the pulsing dot via ::before
+    glyphContent = "";
+  } else {
+    glyphContent = "·";
+  }
 
   return (
     <tr data-state={stage.state}>
       <td>
-        <span className="sl-glyph">{glyph}</span>
+        <span
+          className={"sl-glyph" + (activeTile ? " has-tile" : "")}
+        >
+          {glyphContent}
+        </span>
       </td>
       <td>
         <span className="sl-name">

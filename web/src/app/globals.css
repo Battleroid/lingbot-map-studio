@@ -49,6 +49,15 @@
   --muted: #5c5c5c;
   --rule: #000000;
   --danger: #8a0000;
+  /* New in v2: the one other hue. Forest green used for ready / done /
+     success states. Replaces the old "ready = inverted black" chip
+     because green reads as "succeeded" without shouting. */
+  --ok: #2b5a2b;
+
+  /* Page background — warm paper so shadowed white panels can pop
+     without needing a heavy dither behind them. Dither backgrounds
+     stay available for cells that need them (status-cell, job-side). */
+  --bg-page: #f6f5f2;
 
   /* Typography — strict scale, used everywhere. */
   --fs-xs: 11px;
@@ -59,6 +68,22 @@
 
   --pad: 10px;
   --pad-sm: 6px;
+
+  /* Depth system (redesign-v2) — small radii + crisp offset drops.
+     Shadows are flat/solid, no blur, light from upper-left. Keeps the
+     engineering feel while giving panels and buttons a little lift. */
+  --r-xs: 2px;
+  --r-sm: 3px;
+  --r-md: 4px;
+  --depth-0: none;
+  --depth-1: 2px 2px 0 0 rgba(0, 0, 0, 1);
+  --depth-1-soft: 3px 3px 0 0 rgba(0, 0, 0, 0.12);
+  --depth-2:
+    2px 2px 0 0 rgba(0, 0, 0, 1),
+    5px 5px 0 0 rgba(0, 0, 0, 0.08);
+  --depth-3:
+    3px 3px 0 0 rgba(0, 0, 0, 1),
+    7px 7px 0 0 rgba(0, 0, 0, 0.1);
 
   /* Font stack: Berkeley Mono first (if user installed the licensed file),
      then Commit Mono (bundled free alternative), then Roboto Mono from
@@ -75,7 +100,7 @@
 
 html,
 body {
-  background: var(--bg);
+  background: var(--bg-page);
   color: var(--fg);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
@@ -87,14 +112,21 @@ body {
   min-height: 100vh;
 }
 
-/* Buttons — redesign-v1 makes the four states glanceable:
-     resting — white fill, 1px rule, fg text (unchanged)
-     hover   — thin diagonal hatch over white, 2px inset rule, offset outline
-               (reads as "targetable" without being committed)
-     pressed — inverted black fill with an inset bevel (reads as "held")
-     active  — same as pressed; for radio-style mode/backend pickers that
-               persist the selection via data-pressed
-     disabled — dashed rule + diagonal hatch fill + muted text */
+.app-shell {
+  background: var(--bg-page);
+}
+
+/* Buttons (redesign-v2) — offset-shadow interaction model.
+     resting — 1px rule + crisp 1px offset drop shadow
+     hover   — inverted fill, translate up-left, shadow grows to 2px
+               (reads as "lifted, about to commit")
+     active  — translate down-right, shadow collapses (the button
+               physically clicks)
+     data-pressed — held-down position (inverted fill, no shadow)
+     disabled — muted rule + no shadow. No dashed hatch in v2.
+   The previous redesign-v1 hatch+inset+bevel variants were walked back
+   per user feedback ("far less harsh"). Keep the model simple and
+   everywhere the same — .tile buttons override this below. */
 button {
   font: inherit;
   font-size: var(--fs-sm);
@@ -106,52 +138,40 @@ button {
   text-transform: lowercase;
   letter-spacing: 0.02em;
   line-height: 1.2;
-  position: relative;
+  border-radius: var(--r-sm);
+  box-shadow: 1px 1px 0 0 rgba(0, 0, 0, 1);
+  transition:
+    transform 60ms ease,
+    box-shadow 60ms ease,
+    background 60ms ease,
+    color 60ms ease;
 }
 
 button:hover:not(:disabled):not([data-pressed="true"]) {
-  background-color: var(--bg);
-  background-image: repeating-linear-gradient(
-    -45deg,
-    var(--fg) 0,
-    var(--fg) 1px,
-    transparent 1px,
-    transparent 5px
-  );
-  color: var(--fg);
-  box-shadow: inset 0 0 0 2px var(--fg);
-  outline: 1px solid var(--fg);
-  outline-offset: 2px;
+  background: var(--fg);
+  color: var(--bg);
+  transform: translate(-1px, -1px);
+  box-shadow: 2px 2px 0 0 rgba(0, 0, 0, 1);
 }
 
 button:active:not(:disabled) {
-  background-color: var(--fg);
-  background-image: none;
-  color: var(--bg);
-  box-shadow: inset 2px 2px 0 #3a3a3a;
-  outline: none;
+  transform: translate(1px, 1px);
+  box-shadow: none;
 }
 
 button[data-pressed="true"]:not(:disabled) {
-  background-color: var(--fg);
-  background-image: none;
+  background: var(--fg);
   color: var(--bg);
-  box-shadow: inset 2px 2px 0 #3a3a3a;
-  outline: none;
+  transform: translate(1px, 1px);
+  box-shadow: none;
 }
 
 button:disabled {
   color: var(--muted);
-  border: 1px dashed var(--muted);
-  background-color: var(--bg);
-  background-image: repeating-linear-gradient(
-    135deg,
-    var(--bg) 0 4px,
-    #ededed 4px 8px
-  );
+  border-color: var(--muted);
   cursor: not-allowed;
+  background: var(--bg);
   box-shadow: none;
-  outline: none;
 }
 
 input[type="text"],
@@ -166,6 +186,8 @@ textarea {
   border: 1px solid var(--rule);
   padding: 3px 6px;
   line-height: 1.2;
+  border-radius: var(--r-xs);
+  box-shadow: inset 1px 1px 0 0 rgba(0, 0, 0, 0.06);
 }
 
 input[type="range"] {
@@ -190,7 +212,9 @@ hr,
   margin: 0;
 }
 
-/* Panels — inverted headers for high contrast. */
+/* Panels — inverted headers for high contrast. v2 adds a small radius
+   and a crisp 2px offset drop shadow so panels visually separate from
+   the paper-warm page background without needing a dither. */
 .panel {
   border: 1px solid var(--rule);
   background: var(--bg);
@@ -211,6 +235,8 @@ hr,
   flex-shrink: 0;
   /* Sit above the dithered chrome without picking up its pattern. */
   z-index: 0;
+  border-radius: var(--r-sm);
+  box-shadow: var(--depth-1);
 }
 
 /* Collapsible panels — click the header to toggle. When collapsed only the
@@ -409,12 +435,18 @@ select.form-input {
   letter-spacing: 0.04em;
   line-height: 1.25;
   background: var(--bg);
+  border-radius: var(--r-xs);
 }
 
+/* ready/done/open (websocket connected) — the one place we use green.
+   Was inverted black in v1; v2 introduces --ok for success states. */
 .chip[data-status="ready"],
+.chip[data-status="done"],
+.chip[data-status="completed"],
 .chip[data-status="open"] {
-  background: var(--fg);
+  background: var(--ok);
   color: var(--bg);
+  border-color: var(--ok);
 }
 
 .chip[data-status="failed"] {
@@ -1000,7 +1032,16 @@ table.dtable tr:last-child td {
 }
 
 .stage-line[data-state="done"] {
-  color: var(--fg);
+  color: var(--ok);
+  border-left-color: var(--ok);
+}
+
+.stage-line[data-state="done"] .sl-glyph {
+  color: var(--ok);
+}
+
+.stage-line[data-state="done"] .sl-name {
+  color: var(--ok);
 }
 
 .stage-line[data-state="failed"] {
@@ -1142,13 +1183,16 @@ table.dtable tr:last-child td {
 
 /* per-state styling */
 .sl-table tr[data-state="done"] td {
-  color: var(--fg);
+  color: var(--ok);
 }
 .sl-table tr[data-state="done"] {
-  border-left-color: #c8c8c8;
+  border-left-color: var(--ok);
 }
 .sl-table tr[data-state="done"] .sl-glyph {
-  color: var(--fg);
+  color: var(--ok);
+}
+.sl-table tr[data-state="done"] .sl-name {
+  color: var(--ok);
 }
 
 .sl-table tr[data-state="active"] td {
@@ -1166,6 +1210,21 @@ table.dtable tr:last-child td {
   background: var(--fg);
   border-radius: 50%;
   animation: sl-pulse 1.1s ease-in-out infinite;
+}
+
+/* Suppress the CSS pulsing dot when a three.js stage tile is rendered
+   inline — the tile is the glyph. */
+.sl-table tr[data-state="active"] .sl-glyph.has-tile::before {
+  content: none;
+}
+.sl-table .sl-glyph.has-tile {
+  width: 16px;
+  height: 14px;
+  vertical-align: middle;
+}
+.sl-table .sl-glyph.has-tile .sl-tile {
+  display: inline-block;
+  vertical-align: middle;
 }
 .sl-table tr[data-state="active"] .sl-name .leader {
   background-image: linear-gradient(
@@ -1217,6 +1276,24 @@ table.dtable tr:last-child td {
   }
 }
 
+/* Progress column sub-grid (redesign-v2): keeps the mini bar pinned at
+   a fixed 52px and the percentage right-aligned in a 36px block. Prior
+   inline rendering shifted the bar horizontally as the percentage text
+   grew from `—` to `100%`. */
+.sl-prog {
+  display: inline-grid;
+  grid-template-columns: 52px 36px;
+  column-gap: 8px;
+  align-items: center;
+}
+.sl-pct {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sl-empty {
+  color: var(--muted);
+}
+
 /* inline mini progress bar sitting next to the percentage */
 .sl-mini {
   display: inline-block;
@@ -1225,7 +1302,6 @@ table.dtable tr:last-child td {
   border: 1px solid var(--rule);
   background: var(--soft);
   vertical-align: middle;
-  margin-right: 6px;
   position: relative;
 }
 .sl-mini > span {
@@ -1536,9 +1612,12 @@ table.dtable tr:last-child td {
   );
 }
 
-/* done — solid fill with a terminating ✓ */
+/* done — v2 switches from solid black to --ok green + white ✓ */
+.pb.done {
+  border-color: var(--ok);
+}
 .pb.done > .fill {
-  background: var(--fg);
+  background: var(--ok);
 }
 .pb.done::after {
   content: "✓";
@@ -1640,4 +1719,77 @@ table.dtable tr:last-child td {
   .home-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ─── Tile picker (mode + backend) — redesign-v2 ───────────────────
+   Each tile is a <button> containing an animated three.js canvas plus
+   a lowercase label + hint. Tiles live inside a single `.tile-row` so
+   they share a border and feel like one unit. Pressed state uses a
+   soft-ink bg + a thick inset-bottom rule (the "softer" selection the
+   user asked for in the v2 chat), not the harsh inverted black. */
+.tile-row {
+  display: grid !important;
+  gap: 0;
+  border: 1px solid var(--rule);
+  overflow: hidden;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  box-shadow: var(--depth-1);
+}
+button.tile {
+  border: none;
+  padding: 10px 12px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: none;
+  border-radius: 0;
+  min-width: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  transition: background 120ms ease;
+}
+button.tile:hover:not(.is-active):not(:disabled) {
+  background: var(--soft);
+  color: var(--fg);
+  transform: none;
+  box-shadow: none;
+}
+button.tile:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+button.tile.is-active,
+button.tile[data-pressed="true"]:not(:disabled) {
+  background: var(--soft);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--fg);
+  transform: none;
+}
+.tile.is-active .tile-label {
+  font-weight: 700;
+}
+.tile-canvas {
+  width: 100%;
+  display: block;
+  background: var(--bg);
+}
+.tile-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.tile-desc {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: lowercase;
+  white-space: normal;
+  line-height: 1.35;
 }

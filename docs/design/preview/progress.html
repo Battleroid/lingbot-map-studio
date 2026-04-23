@@ -49,8 +49,9 @@
         #6a0000 4px, #6a0000 8px);
   }
 
-  /* DONE — solid black + terminating tick */
-  .pb.done > .fill { background: #000; }
+  /* DONE — ok green + terminating tick */
+  .pb.done { border-color: #2b5a2b; }
+  .pb.done > .fill { background: #2b5a2b; }
   .pb.done::after {
     content: "✓";
     position: absolute;
@@ -105,5 +106,5 @@
   </div>
 
   <hr class="rule">
-  <div class="mono-small">active = marching diagonal hatch · paused = dashed rule · failed = red hatch · done = ✓ glyph · resting = empty track</div>
+  <div class="mono-small">active = marching diagonal hatch · paused = dashed rule · failed = danger red hatch · done = ok green + ✓ glyph · resting = empty track</div>
 </div></body></html>

@@ -11,6 +11,7 @@
   --muted: #5c5c5c;
   --rule: #000000;
   --danger: #8a0000;
+  --ok: #2b5a2b;
   --font-mono: "Berkeley Mono", "Commit Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 16px;
 }
@@ -69,7 +70,10 @@ html, body {
   text-transform: lowercase; font-size: var(--fs-xs); letter-spacing: 0.04em;
   line-height: 1.25; background: var(--bg);
 }
-.sm-chip[data-status="ready"] { background: var(--fg); color: var(--bg); }
+.sm-chip[data-status="ready"],
+.sm-chip[data-status="open"],
+.sm-chip[data-status="done"],
+.sm-chip[data-status="completed"] { background: var(--ok); color: var(--bg); border-color: var(--ok); }
 .sm-chip[data-status="failed"] { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 .sm-chip[data-status="queued"],
 .sm-chip[data-status="inference"] { background: var(--soft); }
