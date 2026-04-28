@@ -41,23 +41,52 @@
 }
 
 :root {
-  /* Palette */
+  /* Core grayscale — chrome surfaces. The accent palette below carries
+     signal; chrome stays grayscale-first. */
   --bg: #ffffff;
-  --fg: #000000;
+  --fg: #0a0a0a;
   --soft: #f4f4f4;
   --soft-2: #e8e8e8;
   --muted: #5c5c5c;
-  --rule: #000000;
-  --danger: #8a0000;
-  /* New in v2: the one other hue. Forest green used for ready / done /
-     success states. Replaces the old "ready = inverted black" chip
-     because green reads as "succeeded" without shouting. */
-  --ok: #2b5a2b;
+  --rule: #0a0a0a;
 
-  /* Page background — warm paper so shadowed white panels can pop
-     without needing a heavy dither behind them. Dither backgrounds
-     stay available for cells that need them (status-cell, job-side). */
-  --bg-page: #f6f5f2;
+  /* Phosphor accent palette — six hues in roughly the same lightness/
+     chroma band so they read as a set. Each maps to a domain concept:
+       green   — slam, ok, completed, primary
+       amber   — lingbot, in-progress, warn
+       cyan    — gsplat, info, queued
+       magenta — links / highlight / fresh activity
+       violet  — mast3r / cool secondary
+       coral   — danger / failed / vram limit (replaces the old blood-red) */
+  --acc-green: #00b86b;
+  --acc-amber: #f0a015;
+  --acc-cyan: #1ea3c4;
+  --acc-magenta: #d8348a;
+  --acc-violet: #6b4cd1;
+  --acc-coral: #e8593a;
+
+  /* Soft tint washes — barely-saturated panel/row backgrounds. Always
+     pair with the matching accent as a 1px border or a 3px inset stripe
+     so the tint reads as deliberate, not as a wash. */
+  --soft-green: #e8f7ef;
+  --soft-amber: #fbeed4;
+  --soft-cyan: #def0f5;
+  --soft-magenta: #fae3ee;
+  --soft-violet: #ece7f8;
+  --soft-coral: #fce4dc;
+
+  /* Semantic aliases */
+  --ok: var(--acc-green);
+  --danger: var(--acc-coral);
+
+  /* Warm paper page ground — colored panels pop against it. */
+  --bg-page: #f7f5f0;
+
+  /* Dither tones — warmed to sit alongside bg-page. */
+  --dither-base: #ecebe6;
+  --dither-ink: #cfcec6;
+  --dither-base-2: #f3f1ec;
+  --dither-ink-2: #dedcd5;
 
   /* Typography — strict scale, used everywhere. */
   --fs-xs: 11px;
@@ -69,21 +98,19 @@
   --pad: 10px;
   --pad-sm: 6px;
 
-  /* Depth system (redesign-v2) — small radii + crisp offset drops.
-     Shadows are flat/solid, no blur, light from upper-left. Keeps the
-     engineering feel while giving panels and buttons a little lift. */
+  /* Depth — small radii + hard offset drops, light from upper-left. */
   --r-xs: 2px;
   --r-sm: 3px;
   --r-md: 4px;
   --depth-0: none;
-  --depth-1: 2px 2px 0 0 rgba(0, 0, 0, 1);
-  --depth-1-soft: 3px 3px 0 0 rgba(0, 0, 0, 0.12);
+  --depth-1: 2px 2px 0 0 rgba(10, 10, 10, 1);
+  --depth-1-soft: 3px 3px 0 0 rgba(10, 10, 10, 0.1);
   --depth-2:
-    2px 2px 0 0 rgba(0, 0, 0, 1),
-    5px 5px 0 0 rgba(0, 0, 0, 0.08);
+    2px 2px 0 0 rgba(10, 10, 10, 1),
+    5px 5px 0 0 rgba(10, 10, 10, 0.06);
   --depth-3:
-    3px 3px 0 0 rgba(0, 0, 0, 1),
-    7px 7px 0 0 rgba(0, 0, 0, 0.1);
+    3px 3px 0 0 rgba(10, 10, 10, 1),
+    7px 7px 0 0 rgba(10, 10, 10, 0.1);
 
   /* Font stack: Berkeley Mono first (if user installed the licensed file),
      then Commit Mono (bundled free alternative), then Roboto Mono from
@@ -139,19 +166,19 @@ button {
   letter-spacing: 0.02em;
   line-height: 1.2;
   border-radius: var(--r-sm);
-  box-shadow: 1px 1px 0 0 rgba(0, 0, 0, 1);
+  box-shadow: 1px 1px 0 0 rgba(10, 10, 10, 1);
   transition:
-    transform 60ms ease,
-    box-shadow 60ms ease,
-    background 60ms ease,
-    color 60ms ease;
+    transform 80ms ease,
+    box-shadow 80ms ease,
+    background 120ms ease,
+    color 120ms ease;
 }
 
 button:hover:not(:disabled):not([data-pressed="true"]) {
   background: var(--fg);
   color: var(--bg);
   transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 0 rgba(0, 0, 0, 1);
+  box-shadow: 2px 2px 0 0 var(--acc-green);
 }
 
 button:active:not(:disabled) {
@@ -187,22 +214,42 @@ textarea {
   padding: 3px 6px;
   line-height: 1.2;
   border-radius: var(--r-xs);
-  box-shadow: inset 1px 1px 0 0 rgba(0, 0, 0, 0.06);
+  box-shadow: inset 1px 1px 0 0 rgba(10, 10, 10, 0.05);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="file"]:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--acc-cyan);
+  box-shadow: 0 0 0 2px var(--soft-cyan);
 }
 
 input[type="range"] {
-  accent-color: var(--fg);
+  accent-color: var(--acc-green);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--acc-green);
 }
 
 a {
   color: var(--fg);
   text-decoration: underline;
+  text-decoration-color: var(--acc-magenta);
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
 
 a:hover {
-  background: var(--fg);
+  background: var(--acc-magenta);
   color: var(--bg);
+  text-decoration-color: var(--acc-magenta);
 }
 
 hr,
@@ -222,21 +269,41 @@ hr,
   flex-direction: column;
   min-height: 0;
   /* Prevent long content (filenames, buttons, inputs) from bursting the panel
-     wider than its grid/flex column. Without this the whole panel can grow
-     beyond the side pane, overlapping the viewer. */
+     wider than its grid/flex column. */
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   /* Don't let a flex parent squeeze us vertically — prior bug was that
-     with several panels stacked in .job-side (flex-column), they'd all
-     shrink proportionally to fit the viewport and get scrunched.
-     The side column handles overflow-y, so panels take their natural
-     height and scroll. */
+     stacked panels in .job-side would all shrink proportionally to fit
+     the viewport and get scrunched. */
   flex-shrink: 0;
   /* Sit above the dithered chrome without picking up its pattern. */
   z-index: 0;
   border-radius: var(--r-sm);
   box-shadow: var(--depth-1);
+  position: relative;
+}
+
+/* Per-panel accent theming — set `data-acc="amber|cyan|magenta|violet|coral|green"`
+   on the panel root and the header gets a 2px phosphor underline matching
+   the domain color. Default (unset) is green. */
+.panel[data-acc="amber"] {
+  --acc: var(--acc-amber);
+}
+.panel[data-acc="cyan"] {
+  --acc: var(--acc-cyan);
+}
+.panel[data-acc="magenta"] {
+  --acc: var(--acc-magenta);
+}
+.panel[data-acc="violet"] {
+  --acc: var(--acc-violet);
+}
+.panel[data-acc="green"] {
+  --acc: var(--acc-green);
+}
+.panel[data-acc="coral"] {
+  --acc: var(--acc-coral);
 }
 
 /* Collapsible panels — click the header to toggle. When collapsed only the
@@ -267,28 +334,28 @@ hr,
   transform: rotate(-90deg);
 }
 
-/* Dithered gray texture — classic Mac Finder / Win3.1 50% gray dither.
-   shape-rendering='crispEdges' keeps it pixelated on retina screens instead
-   of being anti-aliased into a flat tone. Encoded as an inline SVG data URI. */
+/* Dithered gray texture — classic Mac Finder / Win3.1 2x2 checker. Tones
+   are warmed (ecebe6 / cfcec6) to sit alongside the paper-warm bg-page.
+   shape-rendering='crispEdges' keeps it pixelated on retina screens. */
 .dithered {
-  background-color: #e8e8e8;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
+  background-color: #ecebe6;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23ecebe6'/><rect x='0' y='0' width='2' height='2' fill='%23cfcec6'/><rect x='2' y='2' width='2' height='2' fill='%23cfcec6'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
 }
 
 .dithered-strong {
-  background-color: #d8d8d8;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23d8d8d8'/><rect x='0' y='0' width='2' height='2' fill='%23a8a8a8'/><rect x='2' y='2' width='2' height='2' fill='%23a8a8a8'/></svg>");
+  background-color: #d8d6cf;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23d8d6cf'/><rect x='0' y='0' width='2' height='2' fill='%23a8a59b'/><rect x='2' y='2' width='2' height='2' fill='%23a8a59b'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
 }
 
 .dithered-light {
-  background-color: #f0f0f0;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f0f0f0'/><rect x='0' y='0' width='2' height='2' fill='%23d8d8d8'/><rect x='2' y='2' width='2' height='2' fill='%23d8d8d8'/></svg>");
+  background-color: #f3f1ec;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f3f1ec'/><rect x='0' y='0' width='2' height='2' fill='%23dedcd5'/><rect x='2' y='2' width='2' height='2' fill='%23dedcd5'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
@@ -305,6 +372,20 @@ hr,
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  position: relative;
+}
+
+/* Phosphor accent underline on every panel header. Picks up `--acc` from
+   the panel root (defaults to green when unset). The only place an accent
+   touches header chrome. */
+.panel-header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--acc, var(--acc-green));
 }
 
 .panel-header .meta {
@@ -425,47 +506,102 @@ select.form-input {
   padding: 6px 10px;
 }
 
-/* Chips — job status, ws state, etc. */
+/* Chips — phosphor dot prefix + tinted background per status. The dot is
+   the icon; the system stays icon-less otherwise. */
 .chip {
-  display: inline-block;
-  padding: 1px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
   border: 1px solid var(--rule);
   text-transform: lowercase;
   font-size: var(--fs-xs);
   letter-spacing: 0.04em;
-  line-height: 1.25;
+  line-height: 1.3;
   background: var(--bg);
   border-radius: var(--r-xs);
+  font-variant-numeric: tabular-nums;
 }
 
-/* ready/done/open (websocket connected) — the one place we use green.
-   Was inverted black in v1; v2 introduces --ok for success states. */
+.chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--chip-dot, var(--muted));
+  flex-shrink: 0;
+}
+
 .chip[data-status="ready"],
 .chip[data-status="done"],
 .chip[data-status="completed"],
 .chip[data-status="open"] {
-  background: var(--ok);
-  color: var(--bg);
-  border-color: var(--ok);
+  background: var(--soft-green);
+  border-color: #0a6a3f;
+  color: #0a4a2c;
+  --chip-dot: var(--acc-green);
 }
 
 .chip[data-status="failed"] {
-  background: var(--danger);
-  color: var(--bg);
-  border-color: var(--danger);
+  background: var(--soft-coral);
+  border-color: #8a3320;
+  color: #5a1d10;
+  --chip-dot: var(--acc-coral);
 }
 
 .chip[data-status="inference"],
 .chip[data-status="ingest"],
 .chip[data-status="export"],
-.chip[data-status="queued"],
+.chip[data-status="preproc"],
+.chip[data-status="meshing"],
+.chip[data-status="slam"],
+.chip[data-status="training"] {
+  background: var(--soft-amber);
+  border-color: #6e4400;
+  color: #4a2d00;
+  --chip-dot: var(--acc-amber);
+}
+
+.chip[data-status="inference"]::before,
+.chip[data-status="ingest"]::before,
+.chip[data-status="export"]::before,
+.chip[data-status="preproc"]::before,
+.chip[data-status="meshing"]::before,
+.chip[data-status="slam"]::before,
+.chip[data-status="training"]::before,
+.chip[data-status="connecting"]::before {
+  animation: chip-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes chip-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.chip[data-status="queued"] {
+  background: var(--soft-cyan);
+  border-color: #114a59;
+  color: #0a3540;
+  --chip-dot: var(--acc-cyan);
+}
+
 .chip[data-status="connecting"] {
-  background: var(--soft);
+  background: var(--soft-cyan);
+  border-color: #114a59;
+  color: #0a3540;
+  --chip-dot: var(--acc-cyan);
 }
 
 .chip[data-status="cancelled"] {
-  background: #e6e6e6;
-  color: var(--fg);
+  background: var(--soft-2);
+  border-color: var(--muted);
+  color: var(--muted);
+  --chip-dot: var(--muted);
 }
 
 /* Stat rows — config fields and metrics */
@@ -539,12 +675,12 @@ select.form-input {
 }
 
 .log-line.fresh {
-  animation: log-fresh 1.2s ease-out 1;
+  animation: log-fresh 1.4s ease-out 1;
 }
 
 @keyframes log-fresh {
   0% {
-    background: var(--soft-2);
+    background: var(--soft-green);
   }
   100% {
     background: transparent;
@@ -596,10 +732,78 @@ select.form-input {
 
 table.dtable {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: var(--fs-sm);
   table-layout: fixed;
   font-variant-numeric: tabular-nums;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+table.dtable tbody tr {
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+table.dtable tbody tr:hover {
+  background: var(--soft-cyan);
+}
+
+/* Status-tinted job rows — colored fill per status + a 3px inset accent
+   stripe on the leading edge. Hover lifts back to white with the stripe
+   thickening + a 2px bottom underline in the matching accent. The chip
+   pill in the status column was dropped in v2 — rows carry their color
+   on the body, and the stage column carries a glyph + word indicator. */
+table.dtable tbody tr.job-row td {
+  box-shadow: inset 0 0 0 0 transparent;
+}
+table.dtable tbody tr.job-row td:first-child {
+  box-shadow: inset 3px 0 0 0 var(--row-acc, transparent);
+}
+table.dtable tbody tr.job-row[data-status="ready"] {
+  background: var(--soft-green);
+  --row-acc: var(--acc-green);
+}
+table.dtable tbody tr.job-row[data-status="failed"] {
+  background: var(--soft-coral);
+  --row-acc: var(--acc-coral);
+}
+table.dtable tbody tr.job-row[data-status="cancelled"] {
+  background: var(--soft-2);
+  --row-acc: var(--muted);
+  color: var(--muted);
+}
+table.dtable tbody tr.job-row[data-status="inference"],
+table.dtable tbody tr.job-row[data-status="ingest"],
+table.dtable tbody tr.job-row[data-status="export"],
+table.dtable tbody tr.job-row[data-status="preproc"],
+table.dtable tbody tr.job-row[data-status="meshing"],
+table.dtable tbody tr.job-row[data-status="slam"],
+table.dtable tbody tr.job-row[data-status="training"] {
+  background: var(--soft-amber);
+  --row-acc: var(--acc-amber);
+}
+table.dtable tbody tr.job-row[data-status="queued"] {
+  background: var(--soft-cyan);
+  --row-acc: var(--acc-cyan);
+}
+table.dtable tbody tr.job-row:hover {
+  background: var(--bg);
+}
+table.dtable tbody tr.job-row:hover td:first-child {
+  box-shadow:
+    inset 4px 0 0 0 var(--row-acc),
+    inset 0 -2px 0 0 var(--row-acc);
+}
+table.dtable tbody tr.job-row:hover td {
+  box-shadow: inset 0 -2px 0 0 var(--row-acc);
+}
+table.dtable tbody tr.job-row:hover td:last-child {
+  box-shadow:
+    inset 0 -2px 0 0 var(--row-acc),
+    inset -2px 0 0 0 var(--row-acc);
 }
 
 table.dtable th,
@@ -763,8 +967,8 @@ table.dtable tr:last-child td {
   flex-direction: column;
   padding: 16px;
   gap: 16px;
-  background-color: #e8e8e8;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
+  background-color: #ecebe6;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23ecebe6'/><rect x='0' y='0' width='2' height='2' fill='%23cfcec6'/><rect x='2' y='2' width='2' height='2' fill='%23cfcec6'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
@@ -822,8 +1026,8 @@ table.dtable tr:last-child td {
   gap: 12px;
   min-height: 0;
   min-width: 0;
-  background-color: #e8e8e8;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23e8e8e8'/><rect x='0' y='0' width='2' height='2' fill='%23c0c0c0'/><rect x='2' y='2' width='2' height='2' fill='%23c0c0c0'/></svg>");
+  background-color: #ecebe6;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23ecebe6'/><rect x='0' y='0' width='2' height='2' fill='%23cfcec6'/><rect x='2' y='2' width='2' height='2' fill='%23cfcec6'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
@@ -982,8 +1186,8 @@ table.dtable tr:last-child td {
   gap: 6px;
   min-width: 0;
   overflow: hidden;
-  background-color: #f0f0f0;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f0f0f0'/><rect x='0' y='0' width='2' height='2' fill='%23d0d0d0'/><rect x='2' y='2' width='2' height='2' fill='%23d0d0d0'/></svg>");
+  background-color: #f3f1ec;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'><rect width='4' height='4' fill='%23f3f1ec'/><rect x='0' y='0' width='2' height='2' fill='%23dedcd5'/><rect x='2' y='2' width='2' height='2' fill='%23dedcd5'/></svg>");
   background-size: 4px 4px;
   background-repeat: repeat;
   image-rendering: pixelated;
@@ -1207,24 +1411,10 @@ table.dtable tr:last-child td {
   display: inline-block;
   width: 7px;
   height: 7px;
-  background: var(--fg);
+  background: var(--acc-amber);
+  box-shadow: 0 0 0 2px rgba(240, 160, 21, 0.25);
   border-radius: 50%;
   animation: sl-pulse 1.1s ease-in-out infinite;
-}
-
-/* Suppress the CSS pulsing dot when a three.js stage tile is rendered
-   inline — the tile is the glyph. */
-.sl-table tr[data-state="active"] .sl-glyph.has-tile::before {
-  content: none;
-}
-.sl-table .sl-glyph.has-tile {
-  width: 16px;
-  height: 14px;
-  vertical-align: middle;
-}
-.sl-table .sl-glyph.has-tile .sl-tile {
-  display: inline-block;
-  vertical-align: middle;
 }
 .sl-table tr[data-state="active"] .sl-name .leader {
   background-image: linear-gradient(
@@ -1596,19 +1786,19 @@ table.dtable tr:last-child td {
   border-right: 1px dashed var(--rule);
 }
 
-/* failed — blood-red hatch on a tinted track */
+/* failed — coral hatch on a soft-coral track (v2 retired the blood-red). */
 .pb.failed {
   border-color: var(--danger);
-  background: #f4e3e3;
+  background: var(--soft-coral);
 }
 .pb.failed > .fill {
   background-color: var(--danger);
   background-image: repeating-linear-gradient(
     -45deg,
-    #8a0000 0,
-    #8a0000 4px,
-    #6a0000 4px,
-    #6a0000 8px
+    var(--acc-coral) 0,
+    var(--acc-coral) 4px,
+    #b54327 4px,
+    #b54327 8px
   );
 }
 
@@ -1656,7 +1846,13 @@ table.dtable tr:last-child td {
 .vram-bar .used {
   position: absolute;
   inset: 0 auto 0 0;
-  background: var(--fg);
+  background: linear-gradient(
+    90deg,
+    var(--acc-cyan) 0%,
+    var(--acc-green) 60%,
+    var(--acc-amber) 90%,
+    var(--acc-coral) 100%
+  );
   transition: width 220ms linear;
 }
 
@@ -1674,7 +1870,8 @@ table.dtable tr:last-child td {
 }
 
 .vram-bar .limit-mark {
-  background: var(--danger);
+  background: var(--acc-coral);
+  box-shadow: 0 0 0 1px rgba(232, 89, 58, 0.3);
 }
 
 .vram-bar[data-danger="true"] {
@@ -1687,7 +1884,7 @@ table.dtable tr:last-child td {
     background: var(--soft);
   }
   50% {
-    background: rgba(138, 0, 0, 0.25);
+    background: rgba(232, 89, 58, 0.25);
   }
 }
 
@@ -1722,11 +1919,15 @@ table.dtable tr:last-child td {
 }
 
 /* ─── Tile picker (mode + backend) — redesign-v2 ───────────────────
-   Each tile is a <button> containing an animated three.js canvas plus
-   a lowercase label + hint. Tiles live inside a single `.tile-row` so
-   they share a border and feel like one unit. Pressed state uses a
-   soft-ink bg + a thick inset-bottom rule (the "softer" selection the
-   user asked for in the v2 chat), not the harsh inverted black. */
+   Each tile is a <button> with a colored category bar at the top, an
+   uppercase tracked label, and a lowercase plain-language description.
+   No 3D canvas previews (dropped in v2 per chat — "make them just have
+   their title and description instead to keep things simple").
+
+   Per-tile color comes from `data-acc="green|amber|cyan|magenta|violet|coral"`,
+   matching the panel/chip theming. Hover plays a one-shot phosphor sweep
+   across the tile; active state pins the bottom inset stripe + bolds the
+   label and reveals a `>` arrow in the label. */
 .tile-row {
   display: grid !important;
   gap: 0;
@@ -1736,9 +1937,10 @@ table.dtable tr:last-child td {
   border-radius: var(--r-sm);
   box-shadow: var(--depth-1);
 }
+
 button.tile {
   border: none;
-  padding: 10px 12px;
+  padding: 12px 14px;
   text-align: left;
   display: flex;
   flex-direction: column;
@@ -1750,46 +1952,445 @@ button.tile {
   border-radius: 0;
   min-width: 0;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
   font-family: inherit;
   font-size: inherit;
   text-transform: none;
   letter-spacing: normal;
-  transition: background 120ms ease;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
 }
+
+/* Colored category bar across the top of each tile. Faint when idle,
+   solid when active. */
+button.tile::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: var(--tile-acc, var(--muted));
+  opacity: 0.35;
+  transition:
+    opacity 160ms ease,
+    height 160ms ease;
+}
+
+/* Phosphor sweep on hover — one diagonal pass, decoration only. */
+button.tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    transparent 35%,
+    var(--tile-tint, rgba(0, 184, 107, 0.1)) 50%,
+    transparent 65%
+  );
+  transform: translateX(-100%);
+  transition: transform 0s;
+  pointer-events: none;
+}
+
+button.tile:hover:not(.is-active):not(:disabled)::after {
+  transform: translateX(100%);
+  transition: transform 700ms ease;
+}
+
 button.tile:hover:not(.is-active):not(:disabled) {
-  background: var(--soft);
+  background: var(--tile-soft, var(--soft));
   color: var(--fg);
   transform: none;
   box-shadow: none;
 }
+
 button.tile:active:not(:disabled) {
   transform: none;
   box-shadow: none;
 }
+
 button.tile.is-active,
 button.tile[data-pressed="true"]:not(:disabled) {
-  background: var(--soft);
+  background: var(--tile-soft, var(--soft));
   color: var(--fg);
-  box-shadow: inset 0 -2px 0 var(--fg);
+  box-shadow: inset 0 -2px 0 var(--tile-acc, var(--fg));
   transform: none;
 }
+
+button.tile.is-active::before,
+button.tile[data-pressed="true"]:not(:disabled)::before {
+  opacity: 1;
+  height: 4px;
+}
+
 .tile.is-active .tile-label {
+  color: var(--tile-acc, var(--fg));
   font-weight: 700;
 }
-.tile-canvas {
-  width: 100%;
-  display: block;
-  background: var(--bg);
-}
+
 .tile-label {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   text-transform: uppercase;
   letter-spacing: 0.1em;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
 }
+
+/* Arrow lives in the label, hidden until active. Width animates so the
+   text doesn't jump. */
+.tile-label .arrow {
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    width 160ms ease,
+    opacity 160ms ease;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tile.is-active .tile-label .arrow {
+  width: 14px;
+  opacity: 1;
+}
+
 .tile-desc {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
   text-transform: lowercase;
   white-space: normal;
-  line-height: 1.35;
+  line-height: 1.4;
+}
+
+/* Per-tile accent theming */
+button.tile[data-acc="green"] {
+  --tile-acc: var(--acc-green);
+  --tile-soft: var(--soft-green);
+  --tile-tint: rgba(0, 184, 107, 0.12);
+}
+button.tile[data-acc="amber"] {
+  --tile-acc: var(--acc-amber);
+  --tile-soft: var(--soft-amber);
+  --tile-tint: rgba(240, 160, 21, 0.14);
+}
+button.tile[data-acc="cyan"] {
+  --tile-acc: var(--acc-cyan);
+  --tile-soft: var(--soft-cyan);
+  --tile-tint: rgba(30, 163, 196, 0.13);
+}
+button.tile[data-acc="magenta"] {
+  --tile-acc: var(--acc-magenta);
+  --tile-soft: var(--soft-magenta);
+  --tile-tint: rgba(216, 52, 138, 0.12);
+}
+button.tile[data-acc="violet"] {
+  --tile-acc: var(--acc-violet);
+  --tile-soft: var(--soft-violet);
+  --tile-tint: rgba(107, 76, 209, 0.12);
+}
+button.tile[data-acc="coral"] {
+  --tile-acc: var(--acc-coral);
+  --tile-soft: var(--soft-coral);
+  --tile-tint: rgba(232, 89, 58, 0.12);
+}
+
+/* ─── Stage indicator (jobs table inline) ──────────────────────────
+   Glyph + plain word, color-keyed to status. Replaces the chip pill
+   in the jobs table per v2 chat — "I don't understand the point of
+   the stage badges with the bullet point." Active stages get a
+   pulsing phosphor dot with a soft halo. */
+.stage-ind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.stage-ind .glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  line-height: 1;
+  font-size: 11px;
+}
+.stage-ind[data-status="ready"] {
+  color: #0a4a2c;
+}
+.stage-ind[data-status="ready"] .glyph::before {
+  content: "✓";
+  color: var(--acc-green);
+  font-weight: 700;
+}
+.stage-ind[data-status="failed"] {
+  color: #5a1d10;
+}
+.stage-ind[data-status="failed"] .glyph::before {
+  content: "✕";
+  color: var(--acc-coral);
+  font-weight: 700;
+}
+.stage-ind[data-status="cancelled"] {
+  color: var(--muted);
+}
+.stage-ind[data-status="cancelled"] .glyph::before {
+  content: "—";
+  color: var(--muted);
+}
+.stage-ind[data-status="queued"] {
+  color: #0a3540;
+}
+.stage-ind[data-status="queued"] .glyph::before {
+  content: "·";
+  color: var(--acc-cyan);
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 0;
+}
+.stage-ind[data-status="inference"],
+.stage-ind[data-status="ingest"],
+.stage-ind[data-status="export"],
+.stage-ind[data-status="preproc"],
+.stage-ind[data-status="meshing"],
+.stage-ind[data-status="slam"],
+.stage-ind[data-status="training"] {
+  color: #4a2d00;
+}
+.stage-ind[data-status="inference"] .glyph::before,
+.stage-ind[data-status="ingest"] .glyph::before,
+.stage-ind[data-status="export"] .glyph::before,
+.stage-ind[data-status="preproc"] .glyph::before,
+.stage-ind[data-status="meshing"] .glyph::before,
+.stage-ind[data-status="slam"] .glyph::before,
+.stage-ind[data-status="training"] .glyph::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acc-amber);
+  box-shadow: 0 0 0 2px rgba(240, 160, 21, 0.25);
+  animation: chip-pulse 1.2s ease-in-out infinite;
+}
+
+/* ─── Mini progress bar (inline, e.g. jobs table) ─────────────────
+   Per-acc accent fill + a marching scanline shimmer on active rows.
+   Static variant (`.static`) suppresses the shimmer for terminal
+   rows (ready/failed/cancelled). */
+.mini-pb {
+  display: block;
+  width: 100%;
+  height: 6px;
+  border: 1px solid var(--rule);
+  background: var(--bg);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.mini-pb > .fill {
+  display: block;
+  height: 100%;
+  background: var(--mpb-acc, var(--acc-green));
+  transition: width 220ms linear;
+  position: relative;
+}
+.mini-pb > .fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0 6px,
+    rgba(255, 255, 255, 0.22) 6px 8px
+  );
+  animation: pb-shimmer 1.4s linear infinite;
+}
+.mini-pb[data-acc="green"] {
+  --mpb-acc: var(--acc-green);
+}
+.mini-pb[data-acc="amber"] {
+  --mpb-acc: var(--acc-amber);
+}
+.mini-pb[data-acc="cyan"] {
+  --mpb-acc: var(--acc-cyan);
+}
+.mini-pb[data-acc="coral"] {
+  --mpb-acc: var(--acc-coral);
+}
+.mini-pb[data-acc="muted"] {
+  --mpb-acc: var(--muted);
+}
+.mini-pb.static > .fill::after {
+  display: none;
+}
+@keyframes pb-shimmer {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(8px);
+  }
+}
+
+.prog-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prog-cell .pct {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* row-link — table cell links use a magenta underline like body links,
+   without the full-cell hover invert. */
+.row-link {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--acc-magenta);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.row-link:hover {
+  color: var(--acc-magenta);
+  background: transparent;
+  text-decoration-thickness: 2px;
+}
+
+/* ─── Wordmark — animated phosphor pulse on the brand dot ─────────
+   Cycles green → cyan → amber. Sits left of the page title in the
+   app header. */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.brand .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--acc-green);
+  box-shadow: 0 0 0 2px rgba(0, 184, 107, 0.18);
+  animation: brand-pulse 6s ease-in-out infinite;
+}
+@keyframes brand-pulse {
+  0%,
+  100% {
+    background: var(--acc-green);
+    box-shadow: 0 0 0 2px rgba(0, 184, 107, 0.18);
+  }
+  33% {
+    background: var(--acc-cyan);
+    box-shadow: 0 0 0 2px rgba(30, 163, 196, 0.18);
+  }
+  66% {
+    background: var(--acc-amber);
+    box-shadow: 0 0 0 2px rgba(240, 160, 21, 0.18);
+  }
+}
+
+/* Animated phosphor rule under the app header — green → cyan → amber →
+   magenta, scrolling slowly. The chrome stays grayscale; this is the
+   one strip of color in the header. */
+.app-header {
+  position: relative;
+}
+.app-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--acc-green) 0%,
+    var(--acc-cyan) 33%,
+    var(--acc-amber) 66%,
+    var(--acc-magenta) 100%
+  );
+  background-size: 200% 100%;
+  animation: header-rainbow 12s linear infinite;
+}
+.job-header {
+  position: relative;
+}
+.job-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--acc-green) 0%,
+    var(--acc-cyan) 33%,
+    var(--acc-amber) 66%,
+    var(--acc-magenta) 100%
+  );
+  background-size: 200% 100%;
+  animation: header-rainbow 12s linear infinite;
+}
+@keyframes header-rainbow {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 200% 0%;
+  }
+}
+
+/* Subtle entry animation for panels on first paint — gated by reduced
+   motion so users who opted out see panels at full opacity immediately. */
+@media (prefers-reduced-motion: no-preference) {
+  .panel {
+    animation: panel-in 360ms ease-out both;
+  }
+  .panel:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  .panel:nth-child(2) {
+    animation-delay: 60ms;
+  }
+  .panel:nth-child(3) {
+    animation-delay: 120ms;
+  }
+  .panel:nth-child(4) {
+    animation-delay: 180ms;
+  }
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+/* Reduced motion override — disables the brand pulse, header rainbow,
+   chip dot pulse, panel entry, and scanline shimmer for users who set
+   `prefers-reduced-motion: reduce`. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

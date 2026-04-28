@@ -310,6 +310,10 @@ export interface JobSummary {
   frames_total: number | null;
   artifact_count: number;
   processor: ProcessorId;
+  /** Latest progress value 0.0..1.0 surfaced from the job's event tail.
+   * Null for queued / pre-inference jobs that haven't emitted progress
+   * yet. Terminal `ready` rows are pinned to 1.0 by the API. */
+  progress: number | null;
 }
 
 // Known artifact kinds. `suffix`-based routing in the viewer uses this

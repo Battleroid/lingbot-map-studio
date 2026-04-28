@@ -205,7 +205,10 @@ export default function Home() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1 className="page-title">vid3d studio</h1>
+        <span className="brand">
+          <span className="dot" aria-hidden="true" />
+          <h1 className="page-title">vid3d studio</h1>
+        </span>
         <span className="mono-small">
           feed-forward 3d reconstruction · slam · gaussian splat · local gpu
         </span>

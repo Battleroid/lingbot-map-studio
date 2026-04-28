@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useJobList } from "@/hooks/useJob";
 import { deleteJob } from "@/lib/api";
+import type { JobStatus } from "@/lib/types";
 
 /**
  * Relative time, tolerant of client/server clock drift.
@@ -51,6 +52,44 @@ function absTime(iso: string): string {
   );
 }
 
+/** Per-status accent for row tinting + mini-pb fill color. */
+function statusAcc(s: JobStatus): "green" | "amber" | "cyan" | "coral" | "muted" {
+  if (s === "ready") return "green";
+  if (s === "failed") return "coral";
+  if (s === "cancelled") return "muted";
+  if (s === "queued") return "cyan";
+  return "amber"; // preproc / ingest / inference / meshing / export
+}
+
+/** Progress for the table mini-bar. Reads the real `progress` value the
+ * API surfaces from each job's event-log tail (no per-row WS needed).
+ * Falls back to status-based defaults when no progress has been recorded
+ * yet (queued jobs, very old failed/cancelled rows whose events.jsonl was
+ * pruned). Terminal `ready` rows render full + static. */
+function progressFor(
+  s: JobStatus,
+  raw: number | null,
+): { pct: number; isStatic: boolean } {
+  const isTerminal = s === "ready" || s === "failed" || s === "cancelled";
+  if (raw !== null) {
+    const clamped = Math.max(0, Math.min(1, raw));
+    return { pct: Math.round(clamped * 100), isStatic: isTerminal };
+  }
+  if (s === "ready") return { pct: 100, isStatic: true };
+  if (s === "failed" || s === "cancelled") return { pct: 0, isStatic: true };
+  if (s === "queued") return { pct: 0, isStatic: false };
+  return { pct: 0, isStatic: false };
+}
+
+function StageIndicator({ status }: { status: JobStatus }) {
+  return (
+    <span className="stage-ind" data-status={status}>
+      <span className="glyph" />
+      <span>{status}</span>
+    </span>
+  );
+}
+
 export function JobList() {
   const { data, error, isLoading } = useJobList();
   const qc = useQueryClient();
@@ -79,7 +118,7 @@ export function JobList() {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" data-acc="cyan">
       <div className="panel-header">
         <span>jobs</span>
         {data && <span className="meta">{data.length}</span>}
@@ -100,7 +139,13 @@ export function JobList() {
           </div>
         )}
         {data && data.length === 0 && (
-          <div style={{ padding: "var(--pad)", color: "var(--muted)" }}>
+          <div
+            style={{
+              padding: "22px 10px",
+              textAlign: "center",
+              color: "var(--muted)",
+            }}
+          >
             no jobs yet
           </div>
         )}
@@ -108,21 +153,21 @@ export function JobList() {
           <table className="dtable">
             <colgroup>
               <col style={{ width: "130px" }} />
-              <col style={{ width: "110px" }} />
-              <col style={{ width: "80px" }} />
               <col style={{ width: "90px" }} />
+              <col style={{ width: "120px" }} />
               <col />
               <col style={{ width: "70px" }} />
-              <col style={{ width: "80px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "70px" }} />
             </colgroup>
             <thead>
               <tr>
                 <th>id</th>
-                <th>status</th>
+                <th>mode</th>
+                <th>stage</th>
+                <th>progress</th>
                 <th className="num">frames</th>
-                <th className="num">artifacts</th>
                 <th>created</th>
-                <th></th>
                 <th></th>
               </tr>
             </thead>
@@ -132,21 +177,40 @@ export function JobList() {
                   j.status === "ready" ||
                   j.status === "failed" ||
                   j.status === "cancelled";
+                const acc = statusAcc(j.status);
+                const { pct, isStatic } = progressFor(j.status, j.progress);
                 return (
-                  <tr key={j.id}>
-                    <td>{j.id}</td>
+                  <tr key={j.id} className="job-row" data-status={j.status}>
                     <td>
-                      <span className="chip" data-status={j.status}>
-                        {j.status}
-                      </span>
+                      <Link
+                        href={`/jobs/${j.id}`}
+                        className="row-link"
+                        title={j.id}
+                      >
+                        {j.id}
+                      </Link>
+                    </td>
+                    <td>{j.processor}</td>
+                    <td>
+                      <StageIndicator status={j.status} />
+                    </td>
+                    <td>
+                      <div className="prog-cell">
+                        <span
+                          className={"mini-pb" + (isStatic ? " static" : "")}
+                          data-acc={acc}
+                        >
+                          <span
+                            className="fill"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </span>
+                        <span className="pct">{pct}%</span>
+                      </div>
                     </td>
                     <td className="num">{j.frames_total ?? "—"}</td>
-                    <td className="num">{j.artifact_count}</td>
                     <td className="mono-small" title={absTime(j.created_at)}>
                       {relTime(j.created_at)}
-                    </td>
-                    <td>
-                      <Link href={`/jobs/${j.id}`}>open</Link>
                     </td>
                     <td>
                       <button

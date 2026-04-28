@@ -213,6 +213,11 @@ async def update_job(
 
 
 async def list_jobs() -> list[JobSummary]:
+    # Late import: events.py is allowed to read from the same SQLite as
+    # store, but to keep the dependency graph one-way at module import
+    # time we only pull in the helper at call time.
+    from app.jobs.events import latest_progress
+
     async with session() as s:
         rows = (await s.execute(select(JobRow).order_by(JobRow.created_at.desc()))).scalars().all()
         out: list[JobSummary] = []
@@ -221,6 +226,18 @@ async def list_jobs() -> list[JobSummary]:
             # Pre-refactor rows have no `processor` field — treat as lingbot.
             cfg_raw = json.loads(row.config_json)
             processor_id = cfg_raw.get("processor", "lingbot")
+            # Terminal rows pin at 1.0 / 0.0 / 0.0 so the table renders a
+            # full / empty static bar without parsing events.jsonl. For
+            # active rows we tail the event log for the most recent
+            # progress value.
+            if row.status == "ready":
+                progress: Optional[float] = 1.0
+            elif row.status == "failed":
+                progress = latest_progress(row.id)
+            elif row.status == "cancelled":
+                progress = latest_progress(row.id)
+            else:
+                progress = latest_progress(row.id)
             out.append(
                 JobSummary(
                     id=row.id,
@@ -230,6 +247,7 @@ async def list_jobs() -> list[JobSummary]:
                     frames_total=row.frames_total,
                     artifact_count=len(artifacts),
                     processor=processor_id,
+                    progress=progress,
                 )
             )
         return out
