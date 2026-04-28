@@ -27,8 +27,14 @@ services:
       - models:/models
     ports:
       - "8000:8000"
-    depends_on:
-      - base
+    # NOTE: no `depends_on: - base`. The `base` service is profile-gated
+    # (`profiles: [build]`) so it never *runs* — it exists purely as a
+    # build target for the shared image that api/worker-* FROM-extend.
+    # Compose v2 errors when a depends_on target is excluded by the
+    # active profile, so the link is expressed at build time (the FROM
+    # in Dockerfile.api references `lingbot-studio/base:latest`) rather
+    # than as a runtime dependency. Bootstrap the base image first via
+    # `docker compose --profile build build base` (see README quick start).
     ulimits:
       memlock: -1
       stack: 67108864
