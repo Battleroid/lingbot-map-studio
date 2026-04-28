@@ -61,16 +61,24 @@ function statusAcc(s: JobStatus): "green" | "amber" | "cyan" | "coral" | "muted"
   return "amber"; // preproc / ingest / inference / meshing / export
 }
 
-/** Coarse progress for the table mini-bar. Per-job real progress would
- * require a WS subscription per row — heavy for a list view, deferred to
- * the job detail page. Terminal states pin at 100%, queued at 0%, and
- * in-progress states render the shimmering bar at a deterministic 50%
- * just so the row carries motion. */
-function progressFor(s: JobStatus): { pct: number; isStatic: boolean } {
-  if (s === "ready" || s === "failed") return { pct: 100, isStatic: true };
-  if (s === "cancelled") return { pct: 100, isStatic: true };
+/** Progress for the table mini-bar. Reads the real `progress` value the
+ * API surfaces from each job's event-log tail (no per-row WS needed).
+ * Falls back to status-based defaults when no progress has been recorded
+ * yet (queued jobs, very old failed/cancelled rows whose events.jsonl was
+ * pruned). Terminal `ready` rows render full + static. */
+function progressFor(
+  s: JobStatus,
+  raw: number | null,
+): { pct: number; isStatic: boolean } {
+  const isTerminal = s === "ready" || s === "failed" || s === "cancelled";
+  if (raw !== null) {
+    const clamped = Math.max(0, Math.min(1, raw));
+    return { pct: Math.round(clamped * 100), isStatic: isTerminal };
+  }
+  if (s === "ready") return { pct: 100, isStatic: true };
+  if (s === "failed" || s === "cancelled") return { pct: 0, isStatic: true };
   if (s === "queued") return { pct: 0, isStatic: false };
-  return { pct: 50, isStatic: false };
+  return { pct: 0, isStatic: false };
 }
 
 function StageIndicator({ status }: { status: JobStatus }) {
@@ -170,7 +178,7 @@ export function JobList() {
                   j.status === "failed" ||
                   j.status === "cancelled";
                 const acc = statusAcc(j.status);
-                const { pct, isStatic } = progressFor(j.status);
+                const { pct, isStatic } = progressFor(j.status, j.progress);
                 return (
                   <tr key={j.id} className="job-row" data-status={j.status}>
                     <td>

@@ -502,6 +502,12 @@ class JobSummary(BaseModel):
     frames_total: Optional[int] = None
     artifact_count: int = 0
     processor: ProcessorId = "lingbot"
+    # Most recent `progress` value (0.0..1.0) recorded on this job's
+    # event stream, or None if no event with progress has been emitted
+    # yet (queued / pre-inference) or the job is too old to still have
+    # an events.jsonl. Surfaced so the JobList table can render a real
+    # mini progress bar without a per-row WS subscription.
+    progress: Optional[float] = None
 
 
 class MeshEditRequest(BaseModel):

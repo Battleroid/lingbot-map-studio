@@ -32,7 +32,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from app.config import settings
 from app.jobs.schema import JobEvent
@@ -217,6 +217,62 @@ def _read_from(path: Path, offset: int) -> tuple[list[JobEvent], int]:
 def _read_all(path: Path) -> list[JobEvent]:
     events, _ = _read_from(path, 0)
     return events
+
+
+def latest_progress(job_id: str, *, tail_bytes: int = 16384) -> Optional[float]:
+    """Cheapest read of the most recent `progress` value for a job.
+
+    Reads only the trailing `tail_bytes` of `events.jsonl` (not the whole
+    file) and walks lines in reverse until it finds one with a `progress`
+    set. Returns `None` if the file is missing, empty, or has no event
+    with progress recorded yet (e.g. queued / pre-inference jobs).
+
+    Called per-row by `list_jobs()` so the JobList table can render a
+    real `mini-pb` width without a per-row WS subscription. Bounded I/O
+    keeps the list endpoint cheap even for long-running jobs whose
+    events.jsonl has grown to many MB.
+    """
+    import json as _json
+
+    path = _events_path(job_id)
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return None
+    if size == 0:
+        return None
+
+    try:
+        with path.open("rb") as fh:
+            fh.seek(max(0, size - tail_bytes))
+            blob = fh.read()
+    except OSError as exc:
+        log.warning("failed to read tail for %s: %s", path, exc)
+        return None
+
+    # The first line in the read window is almost certainly a partial
+    # line (we sliced mid-event); skip it. If `tail_bytes` happened to
+    # align to a newline boundary we'll just lose at most one event,
+    # which is fine — there are usually many more progress events.
+    lines = blob.split(b"\n")
+    if size > tail_bytes and lines:
+        lines = lines[1:]
+
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        try:
+            payload = _json.loads(raw.decode("utf-8", errors="replace"))
+        except _json.JSONDecodeError:
+            continue
+        prog = payload.get("progress")
+        if prog is None:
+            continue
+        try:
+            return float(prog)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 bus = EventBus()

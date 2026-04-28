@@ -2,22 +2,9 @@
 
 import { useEffect, useState } from "react";
 
-import { ThreeTile, type TileId } from "@/components/ThreeTile";
 import { getJobCost } from "@/lib/api";
 import { type JobStatusDerived, type StageState } from "@/hooks/useJobStatus";
 import type { JobStatus, ProviderCostReadout } from "@/lib/types";
-
-// Map pipeline stage names to the ThreeTile glyph factory name. When a
-// stage transitions to "active", we render its 14px tile inline in the
-// glyph column — only the active row pays the render cost. Stages not
-// listed here fall back to the CSS-drawn pulsing dot.
-const STAGE_TILES: Record<string, TileId> = {
-  ingest: "stage_ingest",
-  preproc: "stage_preproc",
-  inference: "stage_inference",
-  meshing: "stage_meshing",
-  export: "stage_export",
-};
 
 interface Props {
   derived: JobStatusDerived;
@@ -90,28 +77,16 @@ function StageRow({ stage }: { stage: StageState }) {
         ? "…"
         : "—";
 
-  // Glyph column. Active rows ideally render a tiny three.js tile for
-  // the stage (spinning reel for ingest, scanline sweep for preproc,
-  // etc.); if the stage name isn't mapped we fall back to the CSS
-  // pulsing dot. Done/failed/pending render their literal glyph.
-  const activeTile =
-    stage.state === "active" ? STAGE_TILES[stage.name] ?? null : null;
+  // Glyph column. The v2 system stays icon-less — every state is drawn
+  // by the existing `.sl-table .sl-glyph::before` CSS selectors (pulsing
+  // phosphor dot for active, ✓ for done, ✕ for failed, · for pending).
+  // We just emit an empty span and let CSS do the rest.
   let glyphContent: React.ReactNode;
-  if (activeTile) {
-    glyphContent = (
-      <ThreeTile
-        tile={activeTile}
-        height={14}
-        className="sl-tile"
-        style={{ height: 14, width: 14 }}
-      />
-    );
-  } else if (stage.state === "done") {
+  if (stage.state === "done") {
     glyphContent = "✓";
   } else if (stage.state === "failed") {
     glyphContent = "✕";
   } else if (stage.state === "active") {
-    // unknown stage — blank, CSS draws the pulsing dot via ::before
     glyphContent = "";
   } else {
     glyphContent = "·";
@@ -120,11 +95,7 @@ function StageRow({ stage }: { stage: StageState }) {
   return (
     <tr data-state={stage.state}>
       <td>
-        <span
-          className={"sl-glyph" + (activeTile ? " has-tile" : "")}
-        >
-          {glyphContent}
-        </span>
+        <span className="sl-glyph">{glyphContent}</span>
       </td>
       <td>
         <span className="sl-name">

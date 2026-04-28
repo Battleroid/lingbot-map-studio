@@ -1411,24 +1411,10 @@ table.dtable tr:last-child td {
   display: inline-block;
   width: 7px;
   height: 7px;
-  background: var(--fg);
+  background: var(--acc-amber);
+  box-shadow: 0 0 0 2px rgba(240, 160, 21, 0.25);
   border-radius: 50%;
   animation: sl-pulse 1.1s ease-in-out infinite;
-}
-
-/* Suppress the CSS pulsing dot when a three.js stage tile is rendered
-   inline — the tile is the glyph. */
-.sl-table tr[data-state="active"] .sl-glyph.has-tile::before {
-  content: none;
-}
-.sl-table .sl-glyph.has-tile {
-  width: 16px;
-  height: 14px;
-  vertical-align: middle;
-}
-.sl-table .sl-glyph.has-tile .sl-tile {
-  display: inline-block;
-  vertical-align: middle;
 }
 .sl-table tr[data-state="active"] .sl-name .leader {
   background-image: linear-gradient(
