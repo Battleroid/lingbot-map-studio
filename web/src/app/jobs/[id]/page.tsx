@@ -173,9 +173,16 @@ export default function JobPage({ params }: Props) {
     <div className="job-shell">
       <header className="job-header">
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <Link href="/" className="page-title" style={{ textDecoration: "none" }}>
-            · studio
-          </Link>
+          <span className="brand">
+            <span className="dot" aria-hidden="true" />
+            <Link
+              href="/"
+              className="page-title"
+              style={{ textDecoration: "none", color: "inherit" }}
+            >
+              vid3d studio
+            </Link>
+          </span>
           <span className="mono-small">job {id}</span>
           <span className="chip" data-status={manifest?.status ?? "queued"}>
             {manifest?.status ?? "queued"}
