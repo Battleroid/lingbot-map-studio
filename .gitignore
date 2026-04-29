@@ -19,6 +19,9 @@ out/
 .turbo/
 *.log
 .pnpm-store/
+# TypeScript incremental build cache — touched on every `tsc --noEmit`,
+# committing it just churns the working tree across machines.
+*.tsbuildinfo
 
 # editor
 .vscode/
