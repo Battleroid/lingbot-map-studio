@@ -36,5 +36,10 @@ def test_select_simulated_when_monogs_missing(monkeypatch):
 
     fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    # The factory probes `gaussian_splatting` first (MonoGS's primary
+    # import path now that we install via PYTHONPATH instead of pip)
+    # and falls back to `monogs` for legacy forks. Both must be missing
+    # for the simulated session to win.
+    monkeypatch.setitem(sys.modules, "gaussian_splatting", None)
     monkeypatch.setitem(sys.modules, "monogs", None)
     assert select_session_cls() is _MonogsSession

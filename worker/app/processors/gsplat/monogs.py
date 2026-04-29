@@ -115,10 +115,18 @@ def select_session_cls() -> type[SlamSession]:
     if not torch.cuda.is_available():
         return _MonogsSession
     try:
-        # Probe upstream package import. The CUDA session's
-        # `_resolve_mapper_cls` does the deep probe; here we just
-        # confirm the top-level package is on the path.
-        import monogs  # noqa: F401, PLC0415
+        # MonoGS isn't a pip-installable package — the Dockerfile clones
+        # the source into /opt/monogs and adds it to PYTHONPATH. Probe
+        # a couple of likely top-level imports; the CUDA session's
+        # `_resolve_mapper_cls` does the deeper class probe.
+        import importlib  # noqa: PLC0415
+
+        try:
+            importlib.import_module("gaussian_splatting")
+        except ImportError:
+            # Fall back to the legacy probe — some forks namespace
+            # everything under `monogs`.
+            importlib.import_module("monogs")
         from app.processors.gsplat.monogs_cuda import MonogsCudaSession  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         log.info(

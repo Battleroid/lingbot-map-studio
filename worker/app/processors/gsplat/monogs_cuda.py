@@ -89,13 +89,20 @@ def _quat_xyzw_translate_to_matrix(pose_7: np.ndarray) -> np.ndarray:
 
 def _resolve_mapper_cls():
     """Probe the upstream module for the GaussianMapper-equivalent
-    class. The exact import path varies between commits; try the
-    documented one then a couple of common variants."""
+    class. MonoGS isn't a pip-installable package (no proper
+    setup.py); the Dockerfile mounts the source dir at /opt/monogs and
+    sets PYTHONPATH so the top-level `gaussian_splatting.*` modules
+    are importable. The exact class location varies between commits;
+    probe a few likely paths."""
     candidates = [
+        # Most upstream forks expose the mapper at one of these.
+        ("gaussian_splatting.scene", "GaussianMapper"),
+        ("gaussian_splatting.scene.gaussian_model", "GaussianModel"),
+        # Some forks rename the project's top module.
         ("monogs.gaussian_splatting.scene", "GaussianMapper"),
         ("monogs.scene", "GaussianMapper"),
         ("monogs.tracker", "MonogsTracker"),
-        ("monogs", "MonoGS"),
+        ("slam", "SLAM"),
     ]
     last_exc: Optional[Exception] = None
     for module_path, attr in candidates:
