@@ -288,6 +288,40 @@ export default function Home() {
                         {uploading ? "probing..." : "probe videos"}
                       </button>
                     </div>
+                    {/* Sibling entry point to "drop a video": a live
+                        camera-capture flow. The existing upload path
+                        is unchanged; this is purely additive for
+                        users who'd rather scan with the device's
+                        camera in-browser. The link lazy feature-
+                        detects on the capture page itself, so it's
+                        always visible (the page surfaces a friendly
+                        error if getUserMedia isn't available). */}
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 8,
+                        borderTop: "1px solid var(--rule)",
+                        paddingTop: 8,
+                      }}
+                    >
+                      <span className="mono-small">
+                        or capture live from a phone / webcam
+                      </span>
+                      <a
+                        href="/capture"
+                        style={{
+                          padding: "4px 10px",
+                          border: "1px solid var(--rule)",
+                          borderRadius: "var(--r-xs)",
+                          textDecoration: "none",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        capture →
+                      </a>
+                    </div>
                   </>
                 )}
 
