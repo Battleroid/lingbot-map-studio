@@ -1,0 +1,26 @@
+# Compose overlay that points every app service at the GHCR-published
+# image instead of building locally. Use with the base file:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull
+#     docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml up --no-build
+#
+# Or via the Makefile (`make up`), which is the recommended local path.
+#
+# CI publishes a fresh `:latest` after every green run on `main`. Pin to
+# a `:sha-<short>` or `:vX.Y.Z` tag if you need reproducibility — the
+# image-name path is the same, only the tag changes.
+services:
+  api:
+    image: ghcr.io/battleroid/lingbot-map-studio/api:latest
+
+  worker-lingbot:
+    image: ghcr.io/battleroid/lingbot-map-studio/worker-lingbot:latest
+
+  worker-slam:
+    image: ghcr.io/battleroid/lingbot-map-studio/worker-slam:latest
+
+  worker-gs:
+    image: ghcr.io/battleroid/lingbot-map-studio/worker-gs:latest
+
+  web:
+    image: ghcr.io/battleroid/lingbot-map-studio/web:latest

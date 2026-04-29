@@ -22,8 +22,15 @@ RUN pip install "pymeshlab==2023.12.post3" "trimesh==4.4.1"
 RUN pip install "lingbot-map[vis] @ git+https://github.com/Robbyant/lingbot-map.git"
 
 # Optional FlashInfer (paged-KV attention). Skip when USE_FLASHINFER=0 (SDPA fallback).
+#
+# Upstream now ships `flashinfer-python` directly on PyPI; the legacy
+# per-torch index (`https://flashinfer.ai/whl/cu128/torch2.9/`) was retired
+# and 404s for any torch combo. The only thing the cu* index URL is still
+# used for is the optional `flashinfer-jit-cache` package, which avoids
+# the ~30s JIT compile on first attention call.
 RUN if [ "$USE_FLASHINFER" = "1" ]; then \
-        pip install flashinfer-python -i https://flashinfer.ai/whl/cu128/torch2.9/ ; \
+        pip install flashinfer-python && \
+        pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu128 ; \
     fi
 
 CMD ["python", "-m", "app.worker_main", "--worker-class", "lingbot"]
