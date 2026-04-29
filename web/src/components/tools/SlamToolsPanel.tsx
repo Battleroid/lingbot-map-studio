@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Tip } from "@/components/Tip";
+import { useCollapsible } from "@/lib/useCollapsible";
 import {
   createGsplatJobFromSource,
   meshEdit,
@@ -16,6 +17,7 @@ interface Props {
   jobId: string;
   manifest?: JobManifest | null;
   onRevision: (name: string) => void;
+  collapsible?: boolean;
 }
 
 const TIPS = {
@@ -33,7 +35,13 @@ function parseRev(name: string): number {
   return m ? Number(m[1]) : 0;
 }
 
-export function SlamToolsPanel({ jobId, manifest, onRevision }: Props) {
+export function SlamToolsPanel({
+  jobId,
+  manifest,
+  onRevision,
+  collapsible,
+}: Props) {
+  const c = useCollapsible({ enabled: collapsible });
   const router = useRouter();
   const pushRevision = useViewerStore((s) => s.pushRevision);
   const [busy, setBusy] = useState<"poisson" | "train_gs" | null>(null);
@@ -80,9 +88,9 @@ export function SlamToolsPanel({ jobId, manifest, onRevision }: Props) {
   }
 
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>slam tools</span>
+    <div className="panel" {...c.panelProps}>
+      <div className="panel-header" {...c.headerProps}>
+        <span>{c.arrow}slam tools</span>
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 8 }}>
         <div className="section-title">surface reconstruction</div>

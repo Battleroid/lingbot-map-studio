@@ -225,12 +225,19 @@ export default function JobPage({ params }: Props) {
       </header>
 
       <aside className="job-side">
+        {/* Order on the side pane during a job: config (collapsed by
+            default — locked anyway) → tools (the thing the user
+            actually clicks during a run) → export at the bottom (where
+            the partial-snapshot list can grow long without pushing
+            tools off-screen). All collapsible so the user can hide
+            whichever panel they aren't actively touching. */}
         {manifest && isLingbotConfig(manifest.config) && (
           <ConfigPanel
             config={manifest.config}
             onChange={() => undefined}
             readOnly
             compact
+            collapsible
           />
         )}
         {manifest && isSlamConfig(manifest.config) && (
@@ -239,6 +246,7 @@ export default function JobPage({ params }: Props) {
             onChange={() => undefined}
             readOnly
             compact
+            collapsible
           />
         )}
         {manifest && isGsplatConfig(manifest.config) && (
@@ -246,8 +254,15 @@ export default function JobPage({ params }: Props) {
             config={manifest.config}
             onChange={() => undefined}
             readOnly
+            collapsible
           />
         )}
+        <ToolsPanel
+          jobId={id}
+          config={manifest?.config ?? null}
+          onRevision={setMeshOverride}
+          collapsible
+        />
         <ExportMenu
           jobId={id}
           artifacts={manifest?.artifacts ?? []}
@@ -255,11 +270,7 @@ export default function JobPage({ params }: Props) {
           onReexport={(name) =>
             setMeshOverride(name.endsWith(".glb") ? name : activeMeshName)
           }
-        />
-        <ToolsPanel
-          jobId={id}
-          config={manifest?.config ?? null}
-          onRevision={setMeshOverride}
+          collapsible
         />
         {manifest?.error && (
           <div className="panel">

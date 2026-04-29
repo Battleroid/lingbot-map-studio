@@ -3,6 +3,7 @@
 import { PreprocSection } from "@/components/PreprocSection";
 import { Tip } from "@/components/Tip";
 import { type JobConfig, PRESETS } from "@/lib/types";
+import { useCollapsible } from "@/lib/useCollapsible";
 
 interface Props {
   config: JobConfig;
@@ -10,6 +11,10 @@ interface Props {
   readOnly?: boolean;
   compact?: boolean;
   title?: string;
+  /** Header click toggles the body. Used on the read-only job page side
+   *  pane so users can hide the long config when the viewer + tools
+   *  are what they care about. */
+  collapsible?: boolean;
 }
 
 const TIPS: Record<string, string> = {
@@ -156,11 +161,29 @@ function BoolRow({
   );
 }
 
-export function ConfigPanel({ config, onChange, readOnly, compact, title }: Props) {
+export function ConfigPanel({
+  config,
+  onChange,
+  readOnly,
+  compact,
+  title,
+  collapsible,
+}: Props) {
+  // Default-collapsed when locked + collapsible. The job-page sidebar
+  // shows the config as `readOnly + collapsible` and the user almost
+  // always wants the viewer + tools open instead, so saving a click
+  // (and ~600 px of vertical real estate) on first paint is worth it.
+  const c = useCollapsible({
+    enabled: collapsible,
+    initial: Boolean(readOnly),
+  });
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>{title ?? "config"}</span>
+    <div className="panel" {...c.panelProps}>
+      <div className="panel-header" {...c.headerProps}>
+        <span>
+          {c.arrow}
+          {title ?? "config"}
+        </span>
         {readOnly && <span className="meta">locked</span>}
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 6 }}>

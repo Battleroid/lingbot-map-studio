@@ -2,6 +2,7 @@
 
 import { PreprocSection } from "@/components/PreprocSection";
 import { Tip } from "@/components/Tip";
+import { useCollapsible } from "@/lib/useCollapsible";
 import {
   type DpvoConfig,
   type DroidSlamConfig,
@@ -15,6 +16,7 @@ interface Props {
   readOnly?: boolean;
   compact?: boolean;
   title?: string;
+  collapsible?: boolean;
 }
 
 const TIPS: Record<string, string> = {
@@ -142,11 +144,19 @@ export function SlamConfigPanel({
   readOnly,
   compact,
   title,
+  collapsible,
 }: Props) {
+  const c = useCollapsible({
+    enabled: collapsible,
+    initial: Boolean(readOnly),
+  });
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>{title ?? `config · ${config.processor}`}</span>
+    <div className="panel" {...c.panelProps}>
+      <div className="panel-header" {...c.headerProps}>
+        <span>
+          {c.arrow}
+          {title ?? `config · ${config.processor}`}
+        </span>
         {readOnly && <span className="meta">locked</span>}
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 6 }}>
