@@ -272,6 +272,48 @@ export function jobStreamUrl(jobId: string): string {
   return `${proto}//${u.host}/api/jobs/${jobId}/stream`;
 }
 
+// --- Live camera capture ----------------------------------------------
+
+export type CaptureBackend = "mast3r_slam" | "droid_slam" | "dpvo";
+
+export interface CaptureStartResponse {
+  session_id: string;
+  backend: CaptureBackend;
+}
+
+export interface CaptureStopResponse {
+  job_id: string;
+}
+
+export async function startCaptureSession(
+  backend: CaptureBackend = "mast3r_slam",
+): Promise<CaptureStartResponse> {
+  const res = await fetch(`${API_BASE}/api/capture/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ backend }),
+  });
+  if (!res.ok) throw new Error(`capture/start ${res.status}`);
+  return res.json();
+}
+
+export async function stopCaptureSession(
+  sessionId: string,
+): Promise<CaptureStopResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/capture/${sessionId}/stop`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`capture/stop ${res.status}`);
+  return res.json();
+}
+
+export function captureWsUrl(sessionId: string): string {
+  const u = new URL(API_BASE);
+  const proto = u.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${u.host}/api/capture/${sessionId}`;
+}
+
 // --- Cloud (remote execution) -----------------------------------------
 
 export interface CloudProvidersResponse {

@@ -1047,13 +1047,114 @@ async def job_stream(ws: WebSocket, job_id: str) -> None:
             await ws.send_text(event.model_dump_json())
     except WebSocketDisconnect:
         return
-    except Exception as exc:  # noqa: BLE001
-        log.warning("ws %s closed: %s", job_id, exc)
-    finally:
+
+
+# ----------------------------------------------------------------------
+# Live camera-capture endpoints. Counterpart to the upload-then-process
+# flow: client opens a WebSocket, pushes JPEG frames, receives per-frame
+# pose + sparse-cloud points back over the same socket. On stop the
+# session promotes into a regular Job row so the user lands on the
+# normal /jobs/{id} page and can chain gsplat training off the result.
+#
+# The whole lifecycle is single-process: the api container hosts the
+# CaptureManager + WS handler + GPU-bound SLAM session. Multi-worker
+# dispatch is a v2 concern (see plan).
+# ----------------------------------------------------------------------
+
+
+@app.post("/api/capture/start")
+async def capture_start(payload: dict[str, Any]) -> dict[str, Any]:
+    from app.cloud.capture_session import manager as capture_manager
+    from app.processors.slam.live_session import is_supported, SUPPORTED_BACKENDS
+
+    backend = str(payload.get("backend") or "mast3r_slam")
+    if not is_supported(backend):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": f"unsupported backend {backend!r}; "
+                f"choose from {SUPPORTED_BACKENDS}"
+            },
+        )
+    session = await capture_manager.create(backend=backend)
+    return {"session_id": session.id, "backend": session.backend}
+
+
+@app.websocket("/api/capture/{session_id}")
+async def capture_stream(ws: WebSocket, session_id: str) -> None:
+    """Bidirectional WS. Binary inbound = JPEG frame; text outbound =
+    JSON `EmitMessage` from the server side.
+    """
+    import json
+    import numpy as np
+
+    from app.cloud.capture_session import manager as capture_manager
+
+    session = capture_manager.get(session_id)
+    if session is None:
+        await ws.accept()
+        await ws.send_text(json.dumps({"type": "error", "data": {"message": "no such session"}}))
+        await ws.close()
+        return
+
+    await ws.accept()
+
+    async def pump_outgoing() -> None:
         try:
-            await ws.close()
-        except Exception:
+            while True:
+                msg = await session.emit_queue.get()
+                await ws.send_text(json.dumps({"type": msg.type, "data": msg.data}))
+        except WebSocketDisconnect:
+            return
+        except Exception:  # noqa: BLE001
+            return
+
+    out_task = asyncio.create_task(pump_outgoing())
+    frame_idx = 0
+    try:
+        while True:
+            data = await ws.receive_bytes()
+            try:
+                # Lazy import — opencv only on the worker-slam image. The
+                # api container also has it via the base image so the
+                # decode path is fine here.
+                import cv2  # noqa: PLC0415
+
+                arr = np.frombuffer(data, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+                await session.push_frame(frame_idx, img)
+                frame_idx += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("capture %s: frame decode failed: %s", session_id, exc)
+                continue
+    except WebSocketDisconnect:
+        return
+    finally:
+        out_task.cancel()
+        try:
+            await out_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+
+
+@app.post("/api/capture/{session_id}/stop")
+async def capture_stop(session_id: str) -> dict[str, Any]:
+    from app.cloud.capture_session import manager as capture_manager
+
+    result = await capture_manager.stop(session_id)
+    if result is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "no such session"},
+        )
+    if not result.ok:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": result.error or "finalize failed"},
+        )
+    return {"job_id": result.job_id}
 
 
 @app.exception_handler(Exception)
