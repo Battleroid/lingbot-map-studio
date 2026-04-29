@@ -35,6 +35,31 @@ def _apply_sky_mask_to_predictions(predictions: dict, frames_dir: Path) -> dict:
     return predictions
 
 
+def _value_present(predictions: dict, key: str) -> bool:
+    """True iff `key` is in `predictions` AND its value isn't None.
+
+    Bare `key in predictions` would say True for `predictions[key] = None`,
+    which the upstream `predictions_to_glb` happily accepts and then
+    crashes downstream on `.reshape(-1, 3)`. Treat None as absent so the
+    synthesis path takes over.
+    """
+    return predictions.get(key) is not None
+
+
+def _predictions_summary(predictions: dict) -> dict:
+    """`{key: shape_or_type_str}` — for debug messages so users can see
+    what their model variant actually emitted when synthesis can't proceed."""
+    summary: dict = {}
+    for k, v in predictions.items():
+        if v is None:
+            summary[k] = "None"
+        elif hasattr(v, "shape"):
+            summary[k] = str(tuple(v.shape))
+        else:
+            summary[k] = type(v).__name__
+    return summary
+
+
 def _ensure_world_points_for_export(predictions: dict) -> None:
     """Mutate `predictions` so the upstream `predictions_to_glb` has at
     least one of `world_points` / `world_points_from_depth` to consume.
@@ -49,8 +74,15 @@ def _ensure_world_points_for_export(predictions: dict) -> None:
     Compute it ourselves from `depth + intrinsic + extrinsic` and inject
     so the upstream's depth-fallback branch finds what it needs. No-op
     when either key is already present (real `world_points` always wins).
+
+    Status messages go through `print` (not `log.*`) so they reach the
+    user via `capture_stdio` — earlier versions used `log.warning` which
+    silently routed nowhere visible and left users staring at a bare
+    `KeyError: 'world_points_from_depth'` from the upstream library.
     """
-    if "world_points" in predictions or "world_points_from_depth" in predictions:
+    if _value_present(predictions, "world_points") or _value_present(
+        predictions, "world_points_from_depth"
+    ):
         return
 
     # `or` on numpy arrays raises ValueError; use explicit None checks.
@@ -60,10 +92,9 @@ def _ensure_world_points_for_export(predictions: dict) -> None:
     intrinsic = predictions.get("intrinsic")
     extrinsic = predictions.get("extrinsic")
     if depth is None or intrinsic is None or extrinsic is None:
-        log.warning(
-            "predictions missing world_points and depth — cannot synthesise "
-            "world_points_from_depth (have keys: %s)",
-            sorted(predictions.keys()),
+        print(
+            f"[lingbot] cannot synthesise world_points_from_depth — "
+            f"need depth+intrinsic+extrinsic, have {_predictions_summary(predictions)}"
         )
         return
 
@@ -77,18 +108,18 @@ def _ensure_world_points_for_export(predictions: dict) -> None:
     if depth_np.ndim == 4 and depth_np.shape[-1] == 1:
         depth_np = depth_np.squeeze(-1)
     if depth_np.ndim != 3:
-        log.warning(
-            "depth has unexpected shape %s; skipping world_points synthesis",
-            depth_np.shape,
+        print(
+            f"[lingbot] depth has unexpected shape {depth_np.shape}; "
+            f"skipping world_points synthesis"
         )
         return
 
     S, H, W = depth_np.shape
     if K.shape != (S, 3, 3) or E.shape[:1] != (S,):
-        log.warning(
-            "intrinsic / extrinsic shape mismatch (%s / %s vs depth %s); "
-            "skipping world_points synthesis",
-            K.shape, E.shape, depth_np.shape,
+        print(
+            f"[lingbot] intrinsic/extrinsic shape mismatch "
+            f"(K={K.shape}, E={E.shape}, depth={depth_np.shape}); "
+            f"skipping world_points synthesis"
         )
         return
 
@@ -121,18 +152,24 @@ def _ensure_world_points_for_export(predictions: dict) -> None:
             R = E_s[:3, :3]
             t = E_s[:3, 3]
         else:
-            log.warning(
-                "extrinsic[%d] shape %s unrecognised; skipping frame",
-                s, E_s.shape,
+            print(
+                f"[lingbot] extrinsic[{s}] shape {E_s.shape} unrecognised; "
+                f"skipping frame"
             )
             out[s] = 0.0
             continue
         out[s] = cam_xyz @ R.T.astype(np.float32) + t.astype(np.float32)
 
     predictions["world_points_from_depth"] = out
-    log.info(
-        "synthesised world_points_from_depth (S=%d, H=%d, W=%d) for export",
-        S, H, W,
+    # Also synthesise a placeholder confidence map if the model didn't emit one.
+    # Upstream's depth-fallback branch reads `depth_conf`; without it we'd
+    # crash on `np.ones_like(pred_world_points[..., 0])` later if any other
+    # callsite expects it. Use ones so every point passes percentile filtering.
+    if not _value_present(predictions, "depth_conf"):
+        predictions["depth_conf"] = np.ones((S, H, W), dtype=np.float32)
+    print(
+        f"[lingbot] synthesised world_points_from_depth (S={S}, H={H}, W={W}) "
+        f"for export"
     )
 
 
@@ -149,6 +186,18 @@ def _scene_from_predictions(
     from lingbot_map.vis.glb_export import predictions_to_glb
 
     _ensure_world_points_for_export(predictions)
+    if not (
+        _value_present(predictions, "world_points")
+        or _value_present(predictions, "world_points_from_depth")
+    ):
+        # Replace the opaque `KeyError: 'world_points_from_depth'` from upstream
+        # with a clear message naming the actual problem (the model checkpoint
+        # didn't emit world_points OR depth, so we have no geometry to export).
+        raise RuntimeError(
+            "lingbot export: model output has neither `world_points` nor "
+            "`depth` — cannot build GLB. The checkpoint may have point/depth "
+            f"heads disabled. Predictions summary: {_predictions_summary(predictions)}"
+        )
     return predictions_to_glb(
         predictions,
         conf_thres=conf_percentile if conf_percentile is not None else config.conf_percentile,
@@ -189,12 +238,20 @@ def _export_ply_pointcloud(
     if wp is None or np.asarray(wp).size == 0:
         # Truly unrecoverable — depth was missing too. Write an empty
         # PLY so downstream callers don't error on a missing file.
-        log.warning("ply export: no world_points available; writing empty cloud")
+        print("[lingbot] ply export: no world_points available; writing empty cloud")
         cloud = trimesh.PointCloud(np.zeros((0, 3), dtype=np.float32))
         cloud.export(str(out))
         return
     world_points = np.asarray(wp)
-    conf = np.asarray(predictions["world_points_conf"])
+    # When we synthesised from depth the model didn't emit world_points_conf
+    # either; fall back to depth_conf, then to ones. Without this fallback the
+    # PLY path would KeyError after the GLB path was already fixed.
+    conf_arr = predictions.get("world_points_conf")
+    if conf_arr is None:
+        conf_arr = predictions.get("depth_conf")
+    if conf_arr is None:
+        conf_arr = np.ones(world_points.shape[:-1], dtype=np.float32)
+    conf = np.asarray(conf_arr)
     images = predictions.get("images")
 
     if world_points.ndim == 5 and world_points.shape[0] == 1:
