@@ -32,13 +32,23 @@ export class JobStreamClient {
         console.warn("bad ws payload", err);
       }
     });
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (e) => {
       this.notifyStatus("closed");
-      if (!this.closed) {
-        const delay = this.reconnectMs;
-        this.reconnectMs = Math.min(10_000, this.reconnectMs * 2);
-        setTimeout(() => this.connect(), delay);
+      if (this.closed) return;
+      // Server closes the WS cleanly (code 1000) once the job's events.jsonl
+      // has been replayed AND the events.done sentinel exists — i.e. the job
+      // is in a terminal state and there will never be more events. Treat
+      // that as "stop reconnecting" so the jobs page doesn't loop
+      // connecting → closed → connecting → closed forever after a job
+      // finishes. Unclean closes (network blip, server crash, etc.) keep
+      // the existing exponential reconnect.
+      if (e.code === 1000) {
+        this.closed = true;
+        return;
       }
+      const delay = this.reconnectMs;
+      this.reconnectMs = Math.min(10_000, this.reconnectMs * 2);
+      setTimeout(() => this.connect(), delay);
     });
     ws.addEventListener("error", () => {
       try {

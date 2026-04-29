@@ -49,17 +49,37 @@ export function CameraPath({ poses, recordedFps }: Props) {
   const sceneScale = useViewerStore((s) => s.sceneScale);
   const camera = useThree((s) => s.camera);
 
-  const positions = useMemo(
+  // MonoGS (and SLAM mid-run, before pose estimation has converged) sometimes
+  // publishes camera_path.json snapshots where individual entries are missing
+  // either `position` or `quaternion`, or where one is a 2-element array
+  // instead of the expected 3/4-tuple. Indexing those with `position[0]`
+  // crashes the whole viewer with "Cannot read properties of undefined
+  // (reading '0')" — the error boundary catches it and the user sees the
+  // generic "viewer crashed" overlay. Filter to the safe subset before any
+  // useMemo touches them.
+  const safePoses = useMemo(
     () =>
-      poses.map(
-        (p) => new THREE.Vector3(p.position[0], p.position[1], p.position[2]),
+      poses.filter(
+        (p) =>
+          Array.isArray(p?.position) &&
+          p.position.length >= 3 &&
+          Array.isArray(p?.quaternion) &&
+          p.quaternion.length >= 4,
       ),
     [poses],
   );
 
+  const positions = useMemo(
+    () =>
+      safePoses.map(
+        (p) => new THREE.Vector3(p.position[0], p.position[1], p.position[2]),
+      ),
+    [safePoses],
+  );
+
   const quaternions = useMemo(
     () =>
-      poses.map((p) => {
+      safePoses.map((p) => {
         const q = new THREE.Quaternion(
           p.quaternion[0],
           p.quaternion[1],
@@ -70,7 +90,7 @@ export function CameraPath({ poses, recordedFps }: Props) {
         // frustum visually point where the camera was actually looking.
         return q.multiply(COLMAP_TO_THREE.clone());
       }),
-    [poses],
+    [safePoses],
   );
 
   // Publish path diagonal for fly-speed scaling.
@@ -91,11 +111,11 @@ export function CameraPath({ poses, recordedFps }: Props) {
   const camHeight = Math.max(0.001, sceneScale * FRUSTUM_HEIGHT_FRACTION);
 
   useFrame((_state, delta) => {
-    if (!playing || poses.length < 2) return;
+    if (!playing || safePoses.length < 2) return;
     const fps = Math.max(1, recordedFps) * Math.max(0.1, playbackSpeed);
     const next = playbackFrame + delta * fps;
-    if (next >= poses.length - 1) {
-      setPlaybackFrame(poses.length - 1);
+    if (next >= safePoses.length - 1) {
+      setPlaybackFrame(safePoses.length - 1);
       setPlaying(false);
     } else {
       setPlaybackFrame(next);
@@ -103,12 +123,14 @@ export function CameraPath({ poses, recordedFps }: Props) {
   });
 
   // Interpolated current pose (used to drive the playback camera).
-  const clamped = Math.max(0, Math.min(poses.length - 1, playbackFrame));
+  // Indexes the *filtered* `safePoses` so playback never sees an entry whose
+  // `position` / `quaternion` is undefined.
+  const clamped = Math.max(0, Math.min(safePoses.length - 1, playbackFrame));
   const lo = Math.floor(clamped);
-  const hi = Math.min(poses.length - 1, lo + 1);
+  const hi = Math.min(safePoses.length - 1, lo + 1);
   const t = clamped - lo;
-  const a = poses[lo];
-  const b = poses[hi];
+  const a = safePoses[lo];
+  const b = safePoses[hi];
 
   const currentPos = useMemo(() => {
     if (!a || !b) return new THREE.Vector3();
