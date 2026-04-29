@@ -212,12 +212,23 @@ function parseSplatPly(buf: ArrayBuffer): SplatData {
   }
   const stride = cursor;
   const dv = new DataView(buf, headerEnd);
-  const need = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"];
   const byName: Record<string, { type: string; offset: number }> = {};
   for (const p of props) byName[p.name] = p;
-  for (const k of need) {
+  // Position is non-negotiable; everything else has a fallback. MonoGS's
+  // partial splats use uchar `red`/`green`/`blue` instead of the standard
+  // 3DGS `f_dc_0..2` SH coefficients, and may omit `opacity` entirely on
+  // the very first preview ply.
+  for (const k of ["x", "y", "z"]) {
     if (!byName[k]) throw new Error(`missing splat property: ${k}`);
   }
+  const hasFDC =
+    byName.f_dc_0 !== undefined &&
+    byName.f_dc_1 !== undefined &&
+    byName.f_dc_2 !== undefined;
+  const hasRGB =
+    byName.red !== undefined &&
+    byName.green !== undefined &&
+    byName.blue !== undefined;
   const scaleKeys = ["scale_0", "scale_1", "scale_2"].filter(
     (k) => byName[k],
   );
@@ -232,13 +243,24 @@ function parseSplatPly(buf: ArrayBuffer): SplatData {
     positions[i * 3] = readProp(dv, base, byName.x);
     positions[i * 3 + 1] = readProp(dv, base, byName.y);
     positions[i * 3 + 2] = readProp(dv, base, byName.z);
-    const c0 = readProp(dv, base, byName.f_dc_0);
-    const c1 = readProp(dv, base, byName.f_dc_1);
-    const c2 = readProp(dv, base, byName.f_dc_2);
-    // Decode DC SH → approximate RGB. Clamp to [0,1] for display.
-    colors[i * 3] = Math.min(1, Math.max(0, c0 * SH_C0 + 0.5));
-    colors[i * 3 + 1] = Math.min(1, Math.max(0, c1 * SH_C0 + 0.5));
-    colors[i * 3 + 2] = Math.min(1, Math.max(0, c2 * SH_C0 + 0.5));
+    if (hasFDC) {
+      // Standard 3DGS: DC SH → approximate RGB.
+      const c0 = readProp(dv, base, byName.f_dc_0);
+      const c1 = readProp(dv, base, byName.f_dc_1);
+      const c2 = readProp(dv, base, byName.f_dc_2);
+      colors[i * 3] = Math.min(1, Math.max(0, c0 * SH_C0 + 0.5));
+      colors[i * 3 + 1] = Math.min(1, Math.max(0, c1 * SH_C0 + 0.5));
+      colors[i * 3 + 2] = Math.min(1, Math.max(0, c2 * SH_C0 + 0.5));
+    } else if (hasRGB) {
+      // MonoGS minimal partial: uchar 0..255 red/green/blue.
+      colors[i * 3] = readProp(dv, base, byName.red) / 255;
+      colors[i * 3 + 1] = readProp(dv, base, byName.green) / 255;
+      colors[i * 3 + 2] = readProp(dv, base, byName.blue) / 255;
+    } else {
+      // Neither layout — fall back to a neutral gray so the partial still
+      // renders visibly while the gaussian backend is bootstrapping.
+      colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = 0.78;
+    }
     // Scale is stored in log-space; radius ~= exp(scale). Average the axes
     // for a single isotropic size good enough for the point-sprite render.
     if (scaleKeys.length === 3) {
@@ -249,9 +271,13 @@ function parseSplatPly(buf: ArrayBuffer): SplatData {
     } else {
       sizes[i] = 0.02;
     }
-    // Opacity is logit-encoded; sigmoid to 0..1.
-    const op = readProp(dv, base, byName.opacity);
-    opacities[i] = 1 / (1 + Math.exp(-op));
+    // Opacity is logit-encoded; sigmoid to 0..1. Omit → fully opaque.
+    if (byName.opacity !== undefined) {
+      const op = readProp(dv, base, byName.opacity);
+      opacities[i] = 1 / (1 + Math.exp(-op));
+    } else {
+      opacities[i] = 1.0;
+    }
   }
   return { positions, colors, sizes, opacities, count: n };
 }
