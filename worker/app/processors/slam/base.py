@@ -453,7 +453,16 @@ class SlamProcessor(Processor):
                 job_id=ctx.job_id,
                 stage="artifact",
                 message=f"partial snapshot at keyframe {kf_idx}",
-                data={"partial": name, "keyframes": kf_idx},
+                # `name` + `kind` are what `web/src/app/jobs/[id]/page.tsx`
+                # reads via `latestPartialPly` / `latestPartialSplat`.
+                # The legacy `partial` key is kept alongside for any
+                # consumer that still reads it.
+                data={
+                    "name": name,
+                    "kind": "partial_ply",
+                    "partial": name,
+                    "keyframes": kf_idx,
+                },
             )
         )
 

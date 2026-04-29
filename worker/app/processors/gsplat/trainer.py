@@ -467,7 +467,15 @@ class GsplatProcessor(Processor):
                 job_id=ctx.job_id,
                 stage="artifact",
                 message=f"partial splat at iter {iter_idx} ({snapshot.n} gaussians)",
+                # `name` + `kind` are what the frontend reads via
+                # `latestPartialSplat` in `web/src/app/jobs/[id]/page.tsx`.
+                # Without `kind="partial_splat"` the splat layer never
+                # picked up partial-snapshot URLs and only rendered the
+                # final splat.ply at job completion. Legacy `partial`
+                # key kept for any back-compat reader.
                 data={
+                    "name": name,
+                    "kind": "partial_splat",
                     "partial": name,
                     "iter": iter_idx,
                     "n_gaussians": snapshot.n,
