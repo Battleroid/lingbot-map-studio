@@ -238,6 +238,40 @@ class SimulatedSplatTrainer(SplatTrainer):
         )
 
 
+def select_trainer_cls() -> type[SplatTrainer]:
+    """Auto-select the CUDA trainer when it's importable; fall back to
+    the simulated trainer otherwise.
+
+    Two failures roll into the same fallback path so a user can run
+    against the simulated trainer without the worker-gs container even
+    being built:
+      * `gsplat` package not installed (Phase 1 image hasn't shipped yet,
+        or the user is on a CPU dev box).
+      * `torch.cuda.is_available()` is False (worker-gs running without
+        GPU passthrough).
+
+    The fallback is *not* silent — `GsplatProcessor.run()` (Phase 0)
+    emits a warn-level event when the simulated trainer is selected, so
+    the user sees it in the log pane.
+    """
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return SimulatedSplatTrainer
+    if not torch.cuda.is_available():
+        return SimulatedSplatTrainer
+    try:
+        # Bare-minimum import sanity — `gsplat.rasterization` is the symbol
+        # the CUDA trainer touches first. If this raises (missing package,
+        # CUDA mismatch, etc.) the trainer isn't usable.
+        import gsplat.rasterization  # noqa: F401, PLC0415
+        from app.processors.gsplat.cuda_trainer import GsplatCudaTrainer  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        log.info("gsplat: real CUDA trainer not importable (%s); using simulated", exc)
+        return SimulatedSplatTrainer
+    return GsplatCudaTrainer
+
+
 class GsplatProcessor(Processor):
     """3D Gaussian Splat training. Pinned to the `gs` worker class."""
 
@@ -248,9 +282,19 @@ class GsplatProcessor(Processor):
 
     display_name: ClassVar[str] = "Gaussian Splat"
 
-    # Subclasses can swap this for the real CUDA trainer once it's wired
-    # in. The default keeps the pipeline green on any machine.
+    # Auto-detect the right trainer class at instantiation time. Tests can
+    # still override this on the instance to force the simulated path
+    # (`processor.trainer_cls = SimulatedSplatTrainer`). The default-
+    # factory pattern keeps the class attr stable while letting the auto-
+    # detect run lazily on the worker that picked up the job.
     trainer_cls: ClassVar[type[SplatTrainer]] = SimulatedSplatTrainer
+
+    def __init__(self) -> None:
+        # Re-bind the instance attribute to whatever auto-detect picks.
+        # The class attribute stays as SimulatedSplatTrainer so isinstance
+        # checks elsewhere (and the warn-event in run()) still see the
+        # right thing on a CPU box.
+        self.trainer_cls = select_trainer_cls()
 
     async def run(self, ctx: JobContext) -> ProcessorResult:
         cfg = ctx.config
