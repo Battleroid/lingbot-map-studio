@@ -17,19 +17,7 @@ import { LassoSelect } from "./LassoSelect";
 import { MeshLayer } from "./MeshLayer";
 import { PointCloud } from "./PointCloud";
 import { SplatLayer } from "./SplatLayer";
-import { ThreeTile } from "@/components/ThreeTile";
 import { useViewerStore } from "@/lib/viewerStore";
-
-function ViewerEmptyTile() {
-  return (
-    <ThreeTile
-      tile="axis_gizmo"
-      height={100}
-      style={{ width: 140, height: 100 }}
-      ariaLabel="viewer empty state"
-    />
-  );
-}
 
 interface Props {
   glbUrl: string | null;
@@ -197,13 +185,16 @@ export function ViewerCanvas({ glbUrl, plyUrl, splatUrl, cameraPath }: Props) {
   const showSplat = renderLayers.has("splat");
   const showPath = showCameraPath && renderLayers.has("camera_path");
 
-  // Empty-state: nothing to render yet. The design calls for an
-  // axis-gizmo + drifting cloud rendered via the shared ThreeTile
-  // loop — same single-renderer architecture as the mode tiles, so no
-  // extra WebGL context is spent here.
-  const hasContent =
-    Boolean(glbUrl) || Boolean(plyUrl) || Boolean(splatUrl) || cameraPath;
-
+  // Empty-state handling: the Canvas stays mounted regardless of whether
+  // we currently have an artifact URL. Earlier versions returned a
+  // different DOM tree when no URL was set, which meant any transient
+  // URL=null between partial snapshots (e.g. a `partial_cleanup` event
+  // arriving in its own stream batch before `partial_NNN+1`) unmounted
+  // and remounted the entire Canvas — the grid + axes flickered out and
+  // the user lost their camera position on every cleanup cycle. The
+  // "waiting for reconstruction…" overlay further down is layered on
+  // top instead, with `pointerEvents: none`, so the user still sees the
+  // empty-state hint without paying for a full Canvas teardown.
   const cameraProps = useMemo(
     () => ({
       position: [2.5, 2.5, 2.5] as [number, number, number],
@@ -213,42 +204,6 @@ export function ViewerCanvas({ glbUrl, plyUrl, splatUrl, cameraPath }: Props) {
     }),
     [],
   );
-
-  if (!hasContent) {
-    // Axis gizmo + drifting cloud while the job hasn't produced any
-    // artifacts yet. Monochrome + tiny, so it matches the design
-    // system's icon-less, engineering-first tone.
-    return (
-      <div
-        style={{
-          position: "relative",
-          width: "100%",
-          height: "100%",
-          background: "var(--bg-page)",
-          display: "grid",
-          placeItems: "center",
-        }}
-      >
-        <div
-          style={{
-            width: 220,
-            height: 140,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 8,
-            color: "var(--muted)",
-            fontSize: "var(--fs-xs)",
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-          }}
-        >
-          <ViewerEmptyTile />
-          <span>waiting for geometry</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
