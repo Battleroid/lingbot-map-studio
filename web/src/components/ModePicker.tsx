@@ -13,7 +13,7 @@ export type StudioMode = "lingbot" | "slam" | "gsplat";
 // tile's category bar + soft hover wash + active inset stripe all read in
 // the same color. No 3D canvas previews: just title + description.
 //   lingbot → amber  (warn-leaning, the existing/legacy mode)
-//   slam    → green  (the current default for analog FPV footage)
+//   slam    → green  (the recommended default for most footage)
 //   gsplat  → cyan   (info / forward-looking)
 type ModeMeta = {
   acc: "amber" | "green" | "cyan";
@@ -42,7 +42,7 @@ type SlamMeta = { acc: "violet" | "magenta" | "cyan"; hint: string };
 const SLAM_BACKENDS: Record<SlamBackend, SlamMeta> = {
   mast3r_slam: {
     acc: "violet",
-    hint: "calibration-free · best default for FPV",
+    hint: "calibration-free · robust to unknown intrinsics · the safe default",
   },
   droid_slam: { acc: "magenta", hint: "dense · VRAM-heavy · high fidelity" },
   dpvo: { acc: "cyan", hint: "patch-based · lightweight · long clips" },
