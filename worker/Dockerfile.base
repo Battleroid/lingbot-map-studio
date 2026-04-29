@@ -32,6 +32,13 @@ RUN python -m pip install --upgrade pip setuptools wheel
 
 # Shared API + queue + DB deps. Torch is *not* here — each worker image
 # installs its own pinned torch/CUDA matrix.
+#
+# httpx is a hard runtime dep of the cloud module: `app.cloud.http_source`
+# (remote workers), `app.cloud.providers._http_base` (real providers),
+# and `app.cloud.providers.fake` (the always-on fake provider used in
+# tests + local dev) all eager-import it at module load. Without it, the
+# api container crashes during `app.main` import with `ModuleNotFoundError:
+# No module named 'httpx'`.
 RUN pip install \
         "fastapi==0.118.0" \
         "uvicorn[standard]==0.32.0" \
@@ -43,7 +50,8 @@ RUN pip install \
         "sqlalchemy[asyncio]==2.0.36" \
         "aiofiles==24.1.0" \
         "numpy<2.3" \
-        "huggingface_hub==0.26.2"
+        "huggingface_hub==0.26.2" \
+        "httpx[http2]==0.27.2"
 
 WORKDIR /app
 COPY pyproject.toml ./
