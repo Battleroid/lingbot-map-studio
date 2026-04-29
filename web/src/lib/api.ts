@@ -11,8 +11,24 @@ import type {
   ReexportRequest,
 } from "./types";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+// Resolve the API origin at request time rather than baking it into the
+// bundle. Next.js inlines `NEXT_PUBLIC_*` at build, which is fine for the
+// default `make up` localhost stack but breaks the HTTPS-via-Caddy path:
+// the same web image gets reverse-proxied at `https://studio.local`, and
+// a hardcoded `http://localhost:8000` would mixed-content-block the
+// browser. When the env var is unset (compose passes through `""` over
+// the args -> env handoff), `window.location.origin` plus the same-host
+// `/api/*` proxy entry in the Caddyfile gives us the right base for
+// free. Server-side rendering still needs a stable string, so we fall
+// back to the historical localhost default there.
+function resolveApiBase(): string {
+  const fromEnv = process.env.NEXT_PUBLIC_API_BASE;
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  if (typeof window !== "undefined") return window.location.origin;
+  return "http://localhost:8000";
+}
+
+export const API_BASE = resolveApiBase();
 
 // Opaque per-tab id the server scopes in-memory cloud credentials under.
 // Lives in sessionStorage so it dies with the tab; pasted API keys never

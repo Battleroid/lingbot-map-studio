@@ -10,6 +10,7 @@
 #   make up           — pull GHCR images + start (default; foreground)
 #   make up-d         — same, but daemonized
 #   make up-build     — build images from source + start (slow first run)
+#   make up-https     — start with HTTPS via Caddy + mkcert (phone /capture)
 #   make pull         — refresh GHCR images
 #   make down         — stop + remove containers (keeps named volumes)
 #   make logs         — tail logs from every service
@@ -27,7 +28,7 @@
 COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PREBUILT := -f docker-compose.yml -f docker-compose.prebuilt.yml
 
-.PHONY: help doctor up up-d up-build pull down logs ps restart clean \
+.PHONY: help doctor up up-d up-build up-https pull down logs ps restart clean \
         shell-api shell-lingbot shell-slam shell-gs
 
 help:
@@ -74,6 +75,40 @@ up-d: .env ## same as up, but daemonized
 up-build: .env ## build images from source + start (slow first run)
 	$(COMPOSE) --profile build build
 	$(COMPOSE) up
+
+# HTTPS via Caddy + a mkcert-issued cert. Required for `getUserMedia`
+# (and thus the /capture page) to work from a phone — mobile browsers
+# only allow camera access on HTTPS or localhost.
+#
+# Prereqs (one-time):
+#   1. install mkcert on the host: `mkcert -install`
+#   2. generate the cert pair (replace the IP with your studio host's
+#      LAN address — find it via `ip addr` / `ipconfig`):
+#        mkdir -p caddy/certs
+#        mkcert -cert-file caddy/certs/cert.pem \
+#               -key-file  caddy/certs/key.pem \
+#               studio.local 192.168.1.42
+#   3. trust the same root CA on the phone (Settings → Security →
+#      Encryption & credentials → Install certificate → CA, then pick
+#      the file at `$(mkcert -CAROOT)/rootCA.pem`).
+#   4. add `studio.local` to the phone's `/etc/hosts` equivalent or set
+#      a matching DNS entry on your router. (Or just use the LAN IP and
+#      pass it via `STUDIO_HOSTNAME=192.168.1.42`.)
+#
+# We rebuild `web` here with an empty NEXT_PUBLIC_API_BASE so the
+# runtime fallback to `window.location.origin` kicks in (the bundle
+# would otherwise have `http://localhost:8000` baked in and
+# mixed-content-block from the HTTPS origin).
+up-https: .env ## start with HTTPS via Caddy + mkcert (for phone /capture)
+	@if [ ! -f caddy/certs/cert.pem ] || [ ! -f caddy/certs/key.pem ]; then \
+	  echo "[!] missing caddy/certs/{cert,key}.pem — see the recipe in"; \
+	  echo "    the Makefile up-https target or README §scanning-from-phone."; \
+	  exit 1; \
+	fi
+	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile build build base
+	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https build web caddy
+	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https up
+	@echo "[+] open https://$${STUDIO_HOSTNAME:-studio.local}/capture from the phone"
 
 down: ## stop + remove containers (keeps named volumes)
 	$(COMPOSE) $(PREBUILT) down
