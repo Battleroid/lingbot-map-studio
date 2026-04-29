@@ -27,4 +27,25 @@ RUN pip install \
 # source-builds with the CUDA toolkit already present in the base image.
 RUN pip install "gsplat==1.4.0"
 
+# Build deps for MonoGS source build (its 3DGS rasterizer ships its own
+# CUDA extensions).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ninja-build git \
+    && rm -rf /var/lib/apt/lists/*
+
+# MonoGS / Photo-SLAM (Phase 5). The upstream is research-grade with a
+# multi-process architecture; clone + `pip install .` source-builds the
+# rasterization kernels. Bumping SHA is one line. Note: MonoGS's bundled
+# 3DGS rasterizer can coexist with the `gsplat` package above because
+# each registers under its own Python module namespace; if you observe
+# import-order issues at runtime, ensure `gsplat` is imported before
+# `monogs` (the trainer factory in app.processors.gsplat.trainer does
+# this implicitly because GsplatCudaTrainer touches gsplat first).
+ARG MONOGS_SHA=main
+RUN git clone https://github.com/muskie82/MonoGS.git /opt/monogs \
+    && cd /opt/monogs \
+    && git checkout ${MONOGS_SHA} \
+    && pip install --no-cache-dir . \
+    && cd / && rm -rf /opt/monogs/.git
+
 CMD ["python", "-m", "app.worker_main", "--worker-class", "gs"]

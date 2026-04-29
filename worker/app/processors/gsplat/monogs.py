@@ -88,10 +88,45 @@ class MonogsProcessor(SlamProcessor):
     )
 
     def _make_session(self, ctx) -> SlamSession:  # type: ignore[override]
-        log.info("monogs: using simulated tracker (upstream not installed)")
-        session = _MonogsSession()
-        session.set_artifact_dir(ctx.artifacts_dir)
+        cls = select_session_cls()
+        session = cls()
+        # Both the simulated and CUDA sessions accept an artifact_dir
+        # via `set_artifact_dir`; the processor uses it to write the
+        # splat PLY at finalize() time.
+        if hasattr(session, "set_artifact_dir"):
+            session.set_artifact_dir(ctx.artifacts_dir)
         return session
+
+
+def select_session_cls() -> type[SlamSession]:
+    """Auto-select the CUDA session when its dependencies are all
+    importable; fall back to the simulated session otherwise.
+
+    MonoGS is research-grade with a complex multi-process architecture;
+    the upstream import surface shifts between commits. The CUDA
+    session probes a couple of likely entry points and reports a clean
+    ImportError when none match — the factory then falls back to the
+    simulated session and Phase 0's warn event tells the user.
+    """
+    try:
+        import torch  # noqa: PLC0415
+    except ImportError:
+        return _MonogsSession
+    if not torch.cuda.is_available():
+        return _MonogsSession
+    try:
+        # Probe upstream package import. The CUDA session's
+        # `_resolve_mapper_cls` does the deep probe; here we just
+        # confirm the top-level package is on the path.
+        import monogs  # noqa: F401, PLC0415
+        from app.processors.gsplat.monogs_cuda import MonogsCudaSession  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        log.info(
+            "monogs: real CUDA tracker not importable (%s); using simulated",
+            exc,
+        )
+        return _MonogsSession
+    return MonogsCudaSession
 
 
 # ----------------------------------------------------------------------
