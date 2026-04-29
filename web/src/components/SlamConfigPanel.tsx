@@ -1,12 +1,11 @@
 "use client";
 
+import { PreprocSection } from "@/components/PreprocSection";
 import { Tip } from "@/components/Tip";
 import {
   type DpvoConfig,
   type DroidSlamConfig,
   type Mast3rSlamConfig,
-  PREPROC_PRESETS,
-  type PreprocFields,
   type SlamConfig,
 } from "@/lib/types";
 
@@ -29,7 +28,7 @@ const TIPS: Record<string, string> = {
   calibration:
     "Camera intrinsics.\n• auto: estimate fx/fy from a 60° horizontal FOV assumption (safe default for MASt3R-SLAM which is calibration-free anyway).\n• manual: provide fx/fy/cx/cy below.",
   keyframe_policy:
-    "How new keyframes are selected:\n• score_gated: use the FPV keyframe_score stage as a gate (recommended for analog footage).\n• translation: classic — drop a keyframe when the camera has moved more than a threshold.\n• hybrid: both — translation triggers but also require a min sharpness score.",
+    "How new keyframes are selected:\n• score_gated: use the keyframe_score preprocessing stage as a gate. Filters blurry / low-parallax frames before keyframe selection — useful for any noisy or shaky source.\n• translation: classic — drop a keyframe when the camera has moved more than a threshold.\n• hybrid: both — translation triggers but also require a min sharpness score.",
   keyframe_interval:
     "Minimum frame gap between keyframes. Tighter = more graph density, slower, better under jittery motion.",
   score_gate_quantile:
@@ -457,159 +456,11 @@ export function SlamConfigPanel({
           </>
         )}
 
-        <div
-          style={{
-            marginTop: 6,
-            paddingTop: 6,
-            borderTop: "1px solid var(--rule)",
-          }}
-        >
-          <div className="section-title">fpv preprocessing</div>
-        </div>
-        {!readOnly && (
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {Object.entries(PREPROC_PRESETS).map(([name, patch]) => (
-              <button
-                key={name}
-                type="button"
-                onClick={() =>
-                  onChange(patch as unknown as Partial<SlamConfig>)
-                }
-                style={{ flex: 1, minWidth: 0 }}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        )}
-        <BoolRow
-          label="denoise + deflicker"
-          tipKey="preproc_denoise"
-          value={config.preproc_denoise}
+        <PreprocSection
+          config={config}
+          onChange={(patch) => onChange(patch as Partial<SlamConfig>)}
           readOnly={readOnly}
-          onChange={(v) =>
-            onChange({ preproc_denoise: v } as Partial<SlamConfig>)
-          }
-        />
-        <BoolRow
-          label="analog cleanup"
-          tipKey="preproc_analog_cleanup"
-          value={config.preproc_analog_cleanup}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({
-              preproc_analog_cleanup: v,
-            } as Partial<SlamConfig>)
-          }
-        />
-        <BoolRow
-          label="standalone deflicker"
-          tipKey="preproc_deflicker"
-          value={config.preproc_deflicker}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({ preproc_deflicker: v } as Partial<SlamConfig>)
-          }
-        />
-        <BoolRow
-          label="fisheye unwrap"
-          tipKey="preproc_fisheye"
-          value={config.preproc_fisheye}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({ preproc_fisheye: v } as Partial<SlamConfig>)
-          }
-        />
-        {config.preproc_fisheye && !compact && (
-          <>
-            <NumberRow
-              label="fisheye in fov"
-              tipKey="preproc_fisheye"
-              value={config.fisheye_in_fov}
-              step={5}
-              min={60}
-              max={180}
-              readOnly={readOnly}
-              onChange={(v) =>
-                onChange({
-                  fisheye_in_fov: (v ?? 165) as number,
-                } as Partial<SlamConfig>)
-              }
-            />
-            <NumberRow
-              label="fisheye out fov"
-              tipKey="preproc_fisheye"
-              value={config.fisheye_out_fov}
-              step={5}
-              min={40}
-              max={140}
-              readOnly={readOnly}
-              onChange={(v) =>
-                onChange({
-                  fisheye_out_fov: (v ?? 90) as number,
-                } as Partial<SlamConfig>)
-              }
-            />
-          </>
-        )}
-        <BoolRow
-          label="mask osd text"
-          tipKey="preproc_osd_mask"
-          value={config.preproc_osd_mask}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({ preproc_osd_mask: v } as Partial<SlamConfig>)
-          }
-        />
-        <BoolRow
-          label="colour normalisation"
-          tipKey="preproc_color_norm"
-          value={config.preproc_color_norm}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({ preproc_color_norm: v } as Partial<SlamConfig>)
-          }
-        />
-        <BoolRow
-          label="rolling-shutter correction"
-          tipKey="preproc_rs_correction"
-          value={config.preproc_rs_correction}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({
-              preproc_rs_correction: v,
-            } as Partial<SlamConfig>)
-          }
-        />
-        <label className="stat">
-          <Tip text={TIPS.preproc_deblur ?? ""}>
-            <span>deblur</span>
-          </Tip>
-          <select
-            value={config.preproc_deblur}
-            disabled={readOnly}
-            onChange={(e) =>
-              onChange({
-                preproc_deblur:
-                  e.target.value as PreprocFields["preproc_deblur"],
-              } as Partial<SlamConfig>)
-            }
-          >
-            <option value="none">none</option>
-            <option value="unsharp">unsharp</option>
-            <option value="nafnet">nafnet</option>
-          </select>
-        </label>
-        <BoolRow
-          label="keyframe scoring"
-          tipKey="preproc_keyframe_score"
-          value={config.preproc_keyframe_score}
-          readOnly={readOnly}
-          onChange={(v) =>
-            onChange({
-              preproc_keyframe_score: v,
-            } as Partial<SlamConfig>)
-          }
+          compact
         />
 
         <div

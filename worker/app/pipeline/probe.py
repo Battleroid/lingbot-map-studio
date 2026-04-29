@@ -112,18 +112,25 @@ _ANALOG_CODECS = {"mpeg4", "mpeg2video", "mpeg1video", "h263", "msmpeg4v2", "msm
 
 
 def _is_analog_fpv(probes: list[dict[str, Any]]) -> bool:
-    """Best-effort heuristic for `looks like an analog FPV capture`.
+    """Heuristic for "this footage looks low-fi enough to want the FPV
+    cleanup bundle". The function name is historical (analog FPV captures
+    were the original target); in practice it also catches old DVR rips,
+    very low-bitrate phone clips, screen recordings, and anything else
+    that fits the same compression / resolution shape.
 
     Signals:
 
-      * Resolution ≤ 720p (analog feeds top out around NTSC/PAL resolutions;
-        the DVR upscales to 480p/576p/720p).
+      * Resolution ≤ 720p (analog feeds top out around NTSC/PAL
+        resolutions; the DVR upscales to 480p/576p/720p).
       * Bitrate under ~4 Mbps OR codec in the analog-era set. Either is
-        enough on its own — a high-bitrate MPEG-4 rip is still analog, and a
-        low-bitrate h264 capture is still likely an analog feed re-encoded.
+        enough on its own — a high-bitrate MPEG-4 rip is still analog,
+        and a low-bitrate h264 capture is still likely an analog feed
+        re-encoded.
 
     False positives on low-bitrate screen recordings are acceptable: the
-    aggressive preproc preset is still safe, just a bit wasted.
+    fpv preprocessing bundle is mostly cheap stages, and the user can
+    flip the profile back to `hi_def` in the UI if they don't want any
+    cleanup applied.
     """
     max_height = max((p.get("height") or 0) for p in probes)
     max_bitrate = max((p.get("bitrate") or 0) for p in probes)
@@ -141,14 +148,22 @@ def _is_analog_fpv(probes: list[dict[str, Any]]) -> bool:
 def suggest_config(probes: list[dict[str, Any]]) -> dict[str, Any]:
     """Return a partial JobConfig patch derived from probed metadata.
 
+    The default assumption is that the user dropped a hi-def consumer
+    clip (phone, mirrorless, action cam, HD drone) — none of the
+    preprocessing stages are turned on unless a signal says the input
+    is rougher than that. Any of the auto-enabled flags can be flipped
+    back off in the UI before submitting the job.
+
     Rules:
       - target ~10 fps for reconstruction; cap at source fps.
       - total frame estimate > 300 → mode=windowed.
-      - height ≤ 720 or bitrate < 8 Mbps → low-fi: mask_sky on, denoise+OSD on.
-      - analog heuristic (`_is_analog_fpv`) → aggressive preset: analog
-        cleanup, deflicker, color norm, rolling-shutter, unsharp deblur,
-        keyframe scoring. These are all no-ops on a clean digital clip, so
-        we only turn them on when the signal says the input is analog.
+      - height ≤ 720 or bitrate < 8 Mbps → low-fi: mask_sky on,
+        denoise+OSD on.
+      - low-fi/analog heuristic (`_is_analog_fpv`) → enable the FPV
+        cleanup bundle: analog cleanup, deflicker, color norm,
+        rolling-shutter, unsharp deblur, keyframe scoring. These are
+        all no-ops on a clean digital clip, so we only turn them on
+        when the signal says the input is rough enough to need them.
     """
     if not probes:
         return {}

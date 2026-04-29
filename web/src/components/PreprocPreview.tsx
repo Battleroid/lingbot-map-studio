@@ -318,13 +318,13 @@ export function PreprocPreview({ draftId, config }: Props) {
   const analogBlock = showAnalogFfmpeg && (
     <section
       style={{ display: "grid", gap: 6 }}
-      aria-label="analog cleanup preview"
+      aria-label="noise cleanup preview"
     >
       <div
         className="section-title"
         style={{ display: "flex", justifyContent: "space-between" }}
       >
-        <span>analog ffmpeg · drag to compare</span>
+        <span>noise cleanup · drag to compare</span>
         <span style={{ color: "var(--muted)" }}>
           {[useAnalog && "atadenoise", useDeflicker && "deflicker"]
             .filter(Boolean)
@@ -336,7 +336,7 @@ export function PreprocPreview({ draftId, config }: Props) {
         rightSrc={analogUrl}
         leftLabel="before"
         rightLabel="after"
-        alt="analog ffmpeg cleanup"
+        alt="noise cleanup"
       />
     </section>
   );

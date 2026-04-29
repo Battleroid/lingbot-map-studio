@@ -1,9 +1,16 @@
 # lingbot-map-studio
 
-Browser studio for three-mode 3D reconstruction from local video on a local GPU:
+Browser studio for three-mode 3D reconstruction from local video on a local
+GPU. Drop a clip from your phone, mirrorless, action cam, or HD drone — by
+default the studio passes it through to the reconstruction model unmodified.
+Optional preprocessing bundles handle rougher sources (analog FPV captures,
+heavy chroma noise, rolling-shutter skew) when the probe heuristic detects
+them or you opt in manually.
+
+The three modes:
 
 1. **Lingbot** — [lingbot-map](https://github.com/Robbyant/lingbot-map) feed-forward reconstruction. Upload video(s), get a point cloud + textured mesh + camera path, clean up the mesh with lasso-cull / fill-holes / decimate / smooth, export GLB / PLY / OBJ.
-2. **SLAM** — DROID-SLAM, MASt3R-SLAM, DPVO, or MonoGS/Photo-SLAM. Tuned for low-quality analog FPV footage via an upstream preprocessing pipeline (deblur, rolling-shutter correction, color normalization, analog-noise cleanup, keyframe scoring). Outputs pose graph + sparse/dense cloud + optional Poisson mesh; MonoGS additionally emits a Gaussian-Splat scene.
+2. **SLAM** — DROID-SLAM, MASt3R-SLAM, DPVO, or MonoGS/Photo-SLAM. Outputs pose graph + sparse/dense cloud + optional Poisson mesh; MonoGS additionally emits a Gaussian-Splat scene. MASt3R-SLAM is the safe default — calibration-free and robust to unknown camera intrinsics.
 3. **Gaussian Splat training** — a `gsplat`-based trainer that consumes a completed SLAM (or lingbot) job's frames + poses + initial cloud. Renders the growing splat natively in the same three.js canvas during training.
 
 ## Requirements
@@ -75,9 +82,9 @@ Same feed-forward reconstruction as before. Presets:
 
 - **Low-fi drone** — sky masking on, higher confidence threshold, more aggressive keyframe dropping.
 - **High-fi** — sky masking off, lower confidence threshold, more scale frames and camera iterations.
-- **FPV drone** — adds fisheye unwrap + OSD mask + denoise.
+- **FPV drone** — adds fisheye unwrap + OSD mask + denoise (for analog FPV captures).
 
-Knobs: `model_id`, `mode` (streaming/windowed), `window_size`, `overlap_size`, `image_size`, `fps`, `first_k`, `stride`, `mask_sky`, `conf_threshold`, `keyframe_interval`, `num_scale_frames`, `camera_num_iterations`, `use_sdpa`, `offload_to_cpu`, plus the FPV preprocessing block.
+Knobs: `model_id`, `mode` (streaming/windowed), `window_size`, `overlap_size`, `image_size`, `fps`, `first_k`, `stride`, `mask_sky`, `conf_threshold`, `keyframe_interval`, `num_scale_frames`, `camera_num_iterations`, `use_sdpa`, `offload_to_cpu`, plus the preprocessing block (off by default, see [docs/preprocessing.md](docs/preprocessing.md)).
 
 Post-inference, `conf_threshold`, `mask_sky`, and `show_cam` can be re-applied via `POST /api/jobs/{id}/reexport` without re-running the GPU pass (cached pred tensors).
 
@@ -87,12 +94,12 @@ Four backends, all behind the same `Processor` / `SlamSession` interface:
 
 | Backend | Best for | Notes |
 | --- | --- | --- |
-| `mast3r_slam` | Analog FPV (default) | Calibration-free. Robust to bad intrinsics. |
+| `mast3r_slam` | Default — most footage | Calibration-free. Robust to unknown / inaccurate intrinsics. |
 | `droid_slam` | High-fidelity indoor/small scenes | Dense; highest VRAM. |
 | `dpvo` | Long clips on small cards | Patch-based deep VO; sparse cloud. |
 | `monogs` | "I want a splat now" | Photo-SLAM. Emits a Gaussian-Splat scene incrementally. |
 
-Shared config: `max_frames`, `downscale`, `stride`, `fps`, `calibration` (auto / manual fx/fy/cx/cy), `keyframe_policy` (score_gated / translation / hybrid), `partial_snapshot_every`, `run_poisson_mesh`, plus the FPV preprocessing block. Per-backend configs add: DROID `buffer_size` + `global_ba_iters`; MASt3R `match_threshold` + `window_size`; DPVO `patch_per_frame` + `buffer_keyframes`; MonoGS `refine_iters` + `prune_opacity`.
+Shared config: `max_frames`, `downscale`, `stride`, `fps`, `calibration` (auto / manual fx/fy/cx/cy), `keyframe_policy` (score_gated / translation / hybrid), `partial_snapshot_every`, `run_poisson_mesh`, plus the preprocessing block (off by default; opt into the FPV bundle when needed — see [docs/preprocessing.md](docs/preprocessing.md)). Per-backend configs add: DROID `buffer_size` + `global_ba_iters`; MASt3R `match_threshold` + `window_size`; DPVO `patch_per_frame` + `buffer_keyframes`; MonoGS `refine_iters` + `prune_opacity`.
 
 VRAM expectations on a 24 GB card:
 
@@ -109,20 +116,31 @@ Knobs: `iterations`, `sh_degree`, `densify_interval`, `prune_interval`, `prune_o
 
 Live preview: every `preview_every_iters` training steps the trainer writes `partial_splat_NNNN.ply` and emits a `partial_splat` artifact event; the viewer's `SplatLayer` swaps in the latest without stealing the user's camera.
 
-## FPV preprocessing pipeline
+## Preprocessing pipeline
 
-Order (each stage independently toggleable via the config panel):
+The default footage profile is `hi-def · no preproc` — phone, mirrorless,
+action cam, and HD drone clips pass straight through to the reconstruction
+model. Pick `fpv · analog` (or `fpv · aggressive`) from the dropdown at the
+top of any config panel to enable the cleanup bundle for low-bitrate analog
+captures (DVR rips, analog receivers). Individual stages can also be
+toggled under the panel's "advanced" disclosure.
 
-1. **Analog noise cleanup** — `hqdn3d` + `atadenoise` for VHS/chroma-noise kill.
-2. **Deflicker / exposure normalization** — ffmpeg `deflicker` + median-luma pass.
-3. **Color normalization** — grey-world WB + histogram stretch.
-4. **Rolling-shutter correction** — global y-shear estimate from optical flow, applied as an inverse affine warp.
-5. **Motion deblur** — `unsharp` (classical, default) or `nafnet` (learned, checkpoint lazy-downloaded).
-6. **Fisheye unwrap** — existing `v360` filter.
-7. **OSD/HUD mask + inpaint** — static-pixel detector; mask is also exposed to SLAM backends as per-frame ignore.
+Stages, in pipeline order:
+
+1. **Fisheye unwrap** — `v360` filter for any lens wider than ~120° (action cams in superview, FPV micro cams 150-170°).
+2. **Temporal denoise + deflicker** — `hqdn3d` + ffmpeg `deflicker` + median-luma pass. Useful for any noisy / low-light source.
+3. **Heavier atadenoise** — `atadenoise` tuned for chroma noise and dot crawl. Reserve for genuinely rough captures.
+4. **Static-overlay mask + inpaint** — detect persistent overlays (FPV HUD, GoPro battery indicator, watermarks, station logos) and inpaint them out.
+5. **White-balance + histogram stretch** — grey-world WB + 1/99-percentile stretch. Recovers natural colour on tungsten / tinted footage.
+6. **Rolling-shutter correction** — global y-shear estimate from optical flow, applied as an inverse affine warp. Useful for any CMOS source (phones, action cams, FPV digital, drones).
+7. **Motion deblur** — `unsharp` (classical, default) or `nafnet` (learned, checkpoint lazy-downloaded).
 8. **Keyframe scoring** — per-frame Laplacian variance + optical-flow L2; written to `frame_scores.jsonl` and consumed by SLAM backends whose `keyframe_policy=score_gated`.
 
-Presets: `none`, `analog fpv (default)`, `aggressive`. See `docs/fpv_preprocessing.md`.
+Profiles: `hi-def · no preproc` (default), `fpv · analog`, `fpv · aggressive`, `custom`. See [docs/preprocessing.md](docs/preprocessing.md) for per-stage details and FPV-specific notes.
+
+The probe heuristic auto-selects the `fpv · analog` profile when an
+uploaded clip looks low-fi (≤720p with low bitrate, or analog-era codec).
+Drop a 1080p+ phone clip and the dropdown stays at `hi-def`.
 
 ## Berkeley Mono
 
@@ -132,7 +150,7 @@ If you have a licensed [Berkeley Mono](https://usgraphics.com/products/berkeley-
 
 - `worker/` — Python 3.11 FastAPI service + worker claim loop.
   - `app/processors/` — per-mode processors (`lingbot`, `slam/*`, `gsplat/*`) behind a shared `Processor` interface.
-  - `app/pipeline/` — ingest + FPV preprocessing stages + checkpoint cache + VRAM watchdog.
+  - `app/pipeline/` — ingest + preprocessing stages + checkpoint cache + VRAM watchdog.
   - `app/jobs/` — schema (discriminated-union `JobConfig`), runner, cancel token, events, store.
   - `app/mesh/` — pymeshlab-backed mesh ops (cull / fill_holes / decimate / smooth / Poisson).
   - `Dockerfile.lingbot`, `Dockerfile.slam`, `Dockerfile.gs` — one image per worker class.
@@ -142,7 +160,7 @@ If you have a licensed [Berkeley Mono](https://usgraphics.com/products/berkeley-
   - `src/components/Viewer/{PointCloud,MeshLayer,CameraPath,SplatLayer}.tsx` — composable scene layers.
 - `data/` — bind-mounted upload/artifact store (ignored by git).
 - `models/` — HF checkpoint volume (Docker-managed).
-- `docs/` — `processors.md`, `fpv_preprocessing.md`.
+- `docs/` — `processors.md`, `preprocessing.md`.
 
 ## Ports
 

@@ -1,12 +1,9 @@
 "use client";
 
+import { PreprocSection } from "@/components/PreprocSection";
 import { Tip } from "@/components/Tip";
 import { BoolRow, NumberRow } from "@/components/tracking-rows";
-import {
-  type MonogsConfig,
-  PREPROC_PRESETS,
-  type PreprocFields,
-} from "@/lib/types";
+import { type MonogsConfig } from "@/lib/types";
 
 interface Props {
   config: MonogsConfig;
@@ -25,7 +22,7 @@ const TIPS: Record<string, string> = {
   calibration:
     "Camera intrinsics. `auto` estimates fx/fy from a 60° horizontal FOV assumption; `manual` lets you provide fx/fy/cx/cy.",
   keyframe_policy:
-    "How new keyframes are chosen. `score_gated` uses the FPV keyframe scoring stage as a gate — recommended for analog footage.",
+    "How new keyframes are chosen. `score_gated` uses the keyframe scoring preprocessing stage as a gate — filters blurry / low-parallax frames before selection. Useful for any noisy or shaky source.",
   keyframe_interval: "Minimum frame gap between keyframes added to the splat.",
   score_gate_quantile:
     "score_gated only: keep frames whose combined sharpness+motion score is above this quantile. 0.5 drops the blurriest/most-static half.",
@@ -245,97 +242,11 @@ export function MonogsConfigPanel({
           }
         />
 
-        <div
-          style={{
-            marginTop: 6,
-            paddingTop: 6,
-            borderTop: "1px solid var(--rule)",
-          }}
-        >
-          <div className="section-title">fpv preprocessing</div>
-        </div>
-        {!readOnly && (
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {Object.entries(PREPROC_PRESETS).map(([name, patch]) => (
-              <button
-                key={name}
-                type="button"
-                onClick={() =>
-                  onChange(patch as unknown as Partial<MonogsConfig>)
-                }
-                style={{ flex: 1, minWidth: 0 }}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        )}
-        <BoolRow
-          label="denoise + deflicker"
-          value={config.preproc_denoise}
+        <PreprocSection
+          config={config}
+          onChange={(patch) => onChange(patch as Partial<MonogsConfig>)}
           readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_denoise: v })}
-        />
-        <BoolRow
-          label="analog cleanup"
-          value={config.preproc_analog_cleanup}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_analog_cleanup: v })}
-        />
-        <BoolRow
-          label="standalone deflicker"
-          value={config.preproc_deflicker}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_deflicker: v })}
-        />
-        <BoolRow
-          label="fisheye unwrap"
-          value={config.preproc_fisheye}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_fisheye: v })}
-        />
-        <BoolRow
-          label="mask osd text"
-          value={config.preproc_osd_mask}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_osd_mask: v })}
-        />
-        <BoolRow
-          label="colour normalisation"
-          value={config.preproc_color_norm}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_color_norm: v })}
-        />
-        <BoolRow
-          label="rolling-shutter correction"
-          value={config.preproc_rs_correction}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_rs_correction: v })}
-        />
-        <label className="stat">
-          <Tip text="Optional motion-deblur pass.">
-            <span>deblur</span>
-          </Tip>
-          <select
-            value={config.preproc_deblur}
-            disabled={readOnly}
-            onChange={(e) =>
-              onChange({
-                preproc_deblur:
-                  e.target.value as PreprocFields["preproc_deblur"],
-              })
-            }
-          >
-            <option value="none">none</option>
-            <option value="unsharp">unsharp</option>
-            <option value="nafnet">nafnet</option>
-          </select>
-        </label>
-        <BoolRow
-          label="keyframe scoring"
-          value={config.preproc_keyframe_score}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ preproc_keyframe_score: v })}
+          compact
         />
 
         <div
