@@ -1,12 +1,9 @@
 ### SLAM worker.
 ###
-### Hosts the DROID-SLAM / MASt3R-SLAM / DPVO / MonoGS backends. Phase 2
-### ships stub processors so the queue + routing + event flow can be
-### verified end-to-end; Phase 4 drops in the real CUDA extensions.
-###
-### Torch/CUDA matrix is pinned to what the backends' upstream CUDA kernels
-### build against. When Phase 4 lands, this file also installs each
-### backend's pinned deps and builds their `setup.py` extensions.
+### Hosts the DROID-SLAM / MASt3R-SLAM / DPVO / MonoGS backends. Each
+### backend's `_make_session` auto-selects the real CUDA tracker when
+### its upstream package + CUDA are available, and falls back to the
+### simulated session (with a warn event) otherwise.
 ###
 ### Build: `docker build -t lingbot-studio/worker-slam:latest -f worker/Dockerfile.slam worker`
 ARG BASE_IMAGE=lingbot-studio/base:latest
@@ -14,20 +11,32 @@ FROM ${BASE_IMAGE}
 
 ENV WORKER_CLASS=slam
 
-# Torch 2.3 + cu121 tracks the matrix DROID-SLAM / MASt3R-SLAM currently
-# ship prebuilt extensions for. If Phase 4 upgrades one of those, bump
-# here and rebuild this image only.
+# Torch 2.3 + cu121 tracks the matrix MASt3R-SLAM ships prebuilt
+# extensions for. DROID / DPVO / MonoGS each need to slot into this
+# pin or land in their own image — done in their respective phases.
 RUN pip install --index-url https://download.pytorch.org/whl/cu121 \
         "torch==2.3.1" "torchvision==0.18.1"
 
 # Libraries used across SLAM backends (sparse linear algebra, vision utils,
-# optical flow). Kept minimal for Phase 2 — Phase 4 will add each backend's
-# own pinned deps.
+# optical flow).
 RUN pip install \
         "opencv-python-headless==4.10.0.84" \
         "scipy==1.13.1" \
         "einops==0.8.0" \
         "trimesh==4.4.1" \
         "pymeshlab==2023.12.post3"
+
+# Build deps for the backends that source-build CUDA extensions (MASt3R
+# matching kernels, DROID / DPVO custom ops in later phases).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# MASt3R-SLAM (Phase 2). The upstream repo is research-grade and pulls
+# in MASt3R + DUSt3R as dependencies. Pin to a specific commit SHA so
+# repeat builds are deterministic; bump as upstream stabilises.
+ARG MAST3R_SLAM_SHA=main
+RUN pip install --no-cache-dir \
+        "git+https://github.com/rmurai0610/MASt3R-SLAM.git@${MAST3R_SLAM_SHA}"
 
 CMD ["python", "-m", "app.worker_main", "--worker-class", "slam"]
