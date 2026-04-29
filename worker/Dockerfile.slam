@@ -39,4 +39,15 @@ ARG MAST3R_SLAM_SHA=main
 RUN pip install --no-cache-dir \
         "git+https://github.com/rmurai0610/MASt3R-SLAM.git@${MAST3R_SLAM_SHA}"
 
+# DROID-SLAM (Phase 3). Custom CUDA extensions in `droid_backends/` are
+# built from source against the torch + cu121 pin above. Cloning into
+# /opt/droid-slam and `pip install .` runs the upstream setup.py which
+# compiles the kernels — adds ~5 min to a clean image build.
+ARG DROID_SLAM_SHA=main
+RUN git clone https://github.com/princeton-vl/DROID-SLAM.git /opt/droid-slam \
+    && cd /opt/droid-slam \
+    && git checkout ${DROID_SLAM_SHA} \
+    && pip install --no-cache-dir . \
+    && cd / && rm -rf /opt/droid-slam/.git
+
 CMD ["python", "-m", "app.worker_main", "--worker-class", "slam"]
