@@ -33,19 +33,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ninja-build git \
     && rm -rf /var/lib/apt/lists/*
 
-# MonoGS / Photo-SLAM (Phase 5). The upstream is research-grade with a
-# multi-process architecture; clone + `pip install .` source-builds the
-# rasterization kernels. Bumping SHA is one line. Note: MonoGS's bundled
-# 3DGS rasterizer can coexist with the `gsplat` package above because
-# each registers under its own Python module namespace; if you observe
-# import-order issues at runtime, ensure `gsplat` is imported before
-# `monogs` (the trainer factory in app.processors.gsplat.trainer does
-# this implicitly because GsplatCudaTrainer touches gsplat first).
+# MonoGS / Photo-SLAM (Phase 5). Upstream is a runnable research project
+# (multiple top-level dirs: gui/, gaussian_splatting/, submodules/, etc.)
+# without proper Python packaging — `pip install .` fails on the
+# multi-top-level-package layout.
+#
+# Workaround: clone the repo, install its CUDA rasterizer submodule
+# directly (the only piece with a real setup.py), and add the repo
+# root to PYTHONPATH so Python can import `gaussian_splatting.*` from
+# wherever the source landed. The wrapper in
+# `app.processors.gsplat.monogs_cuda` probes those module paths and
+# falls back to the simulated session cleanly when any piece is
+# missing — Phase 0's warn event tells the user.
+#
+# If the diff-gaussian-rasterization submodule build fails (CUDA arch
+# mismatch, missing nvcc, etc.) the rest of the image still builds —
+# the wrapper's import probe will fail and MonoGS auto-falls back to
+# the simulated session.
 ARG MONOGS_SHA=main
-RUN git clone https://github.com/muskie82/MonoGS.git /opt/monogs \
+RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     && cd /opt/monogs \
     && git checkout ${MONOGS_SHA} \
-    && pip install --no-cache-dir . \
-    && cd / && rm -rf /opt/monogs/.git
+    && (pip install --no-cache-dir submodules/diff-gaussian-rasterization \
+            || echo "monogs: diff-gaussian-rasterization build failed; CUDA path will fall back to simulated") \
+    && (pip install --no-cache-dir submodules/simple-knn \
+            || echo "monogs: simple-knn build failed; CUDA path will fall back to simulated") \
+    && rm -rf /opt/monogs/.git
+ENV PYTHONPATH=/opt/monogs:$PYTHONPATH
 
 CMD ["python", "-m", "app.worker_main", "--worker-class", "gs"]
