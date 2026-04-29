@@ -19,8 +19,12 @@
 #   make shell-api    — exec a bash shell in the api container
 #   make shell-{lingbot,slam,gs} — same, for each worker
 
-# Detect docker compose v2 (preferred) vs v1.
-COMPOSE := $(shell command -v docker-compose >/dev/null 2>&1 && echo "docker-compose" || echo "docker compose")
+# Prefer Docker Compose v2 (the Go-based `docker compose` plugin shipped
+# with current Docker Desktop / engine packages). Fall back to the legacy
+# Python-based `docker-compose` v1 only if v2 isn't available — v1 was
+# end-of-lifed in 2023 and has known cosmetic bugs with newer dockerd
+# event streams (e.g. "KeyError: 'id'" in its event-watcher thread).
+COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PREBUILT := -f docker-compose.yml -f docker-compose.prebuilt.yml
 
 .PHONY: help doctor up up-d up-build pull down logs ps restart clean \
