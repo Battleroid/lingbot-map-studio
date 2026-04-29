@@ -35,6 +35,107 @@ def _apply_sky_mask_to_predictions(predictions: dict, frames_dir: Path) -> dict:
     return predictions
 
 
+def _ensure_world_points_for_export(predictions: dict) -> None:
+    """Mutate `predictions` so the upstream `predictions_to_glb` has at
+    least one of `world_points` / `world_points_from_depth` to consume.
+
+    Some lingbot-map model variants emit `depth` but skip `world_points`
+    in their inference output (e.g. certain windowed paths). Upstream's
+    `predictions_to_glb` then logs `world_points not found, falling
+    back to depth-based points` and immediately KeyError's on
+    `world_points_from_depth` because the fallback branch expects that
+    derived field, not raw depth.
+
+    Compute it ourselves from `depth + intrinsic + extrinsic` and inject
+    so the upstream's depth-fallback branch finds what it needs. No-op
+    when either key is already present (real `world_points` always wins).
+    """
+    if "world_points" in predictions or "world_points_from_depth" in predictions:
+        return
+
+    # `or` on numpy arrays raises ValueError; use explicit None checks.
+    depth = predictions.get("depth")
+    if depth is None:
+        depth = predictions.get("depth_map")
+    intrinsic = predictions.get("intrinsic")
+    extrinsic = predictions.get("extrinsic")
+    if depth is None or intrinsic is None or extrinsic is None:
+        log.warning(
+            "predictions missing world_points and depth — cannot synthesise "
+            "world_points_from_depth (have keys: %s)",
+            sorted(predictions.keys()),
+        )
+        return
+
+    depth_np = np.asarray(depth)
+    K = np.asarray(intrinsic)
+    E = np.asarray(extrinsic)
+
+    # Normalise shapes — upstream produces (S, H, W) or (S, H, W, 1) for
+    # depth, (S, 3, 3) for K, and (S, 3, 4) c2w for E. _postprocess
+    # already strips the leading batch dim.
+    if depth_np.ndim == 4 and depth_np.shape[-1] == 1:
+        depth_np = depth_np.squeeze(-1)
+    if depth_np.ndim != 3:
+        log.warning(
+            "depth has unexpected shape %s; skipping world_points synthesis",
+            depth_np.shape,
+        )
+        return
+
+    S, H, W = depth_np.shape
+    if K.shape != (S, 3, 3) or E.shape[:1] != (S,):
+        log.warning(
+            "intrinsic / extrinsic shape mismatch (%s / %s vs depth %s); "
+            "skipping world_points synthesis",
+            K.shape, E.shape, depth_np.shape,
+        )
+        return
+
+    # Pixel grid (H, W). Same for every frame.
+    ys, xs = np.meshgrid(
+        np.arange(H, dtype=np.float32),
+        np.arange(W, dtype=np.float32),
+        indexing="ij",
+    )
+
+    out = np.empty((S, H, W, 3), dtype=np.float32)
+    for s in range(S):
+        z = depth_np[s].astype(np.float32)
+        fx, fy = float(K[s, 0, 0]), float(K[s, 1, 1])
+        cx, cy = float(K[s, 0, 2]), float(K[s, 1, 2])
+
+        # Camera-space (right/up/forward) coordinates.
+        cam_x = (xs - cx) * z / max(fx, 1e-9)
+        cam_y = (ys - cy) * z / max(fy, 1e-9)
+        cam_z = z
+
+        cam_xyz = np.stack([cam_x, cam_y, cam_z], axis=-1)  # (H, W, 3)
+
+        # c2w extrinsic: world = R · cam + t
+        E_s = E[s]
+        if E_s.shape == (3, 4):
+            R = E_s[:, :3]
+            t = E_s[:, 3]
+        elif E_s.shape == (4, 4):
+            R = E_s[:3, :3]
+            t = E_s[:3, 3]
+        else:
+            log.warning(
+                "extrinsic[%d] shape %s unrecognised; skipping frame",
+                s, E_s.shape,
+            )
+            out[s] = 0.0
+            continue
+        out[s] = cam_xyz @ R.T.astype(np.float32) + t.astype(np.float32)
+
+    predictions["world_points_from_depth"] = out
+    log.info(
+        "synthesised world_points_from_depth (S=%d, H=%d, W=%d) for export",
+        S, H, W,
+    )
+
+
 def _scene_from_predictions(
     predictions: dict,
     config: JobConfig,
@@ -47,6 +148,7 @@ def _scene_from_predictions(
 ) -> "trimesh.Scene":  # type: ignore[name-defined]
     from lingbot_map.vis.glb_export import predictions_to_glb
 
+    _ensure_world_points_for_export(predictions)
     return predictions_to_glb(
         predictions,
         conf_thres=conf_percentile if conf_percentile is not None else config.conf_percentile,
@@ -76,7 +178,22 @@ def _export_ply_pointcloud(
     """
     import trimesh
 
-    world_points = np.asarray(predictions["world_points"])
+    # Same model-variant gotcha as _scene_from_predictions: some
+    # inference paths emit `depth` but no `world_points`. Synthesise from
+    # depth + K + E if needed; upstream's PLY export gets the same
+    # treatment as the GLB path.
+    _ensure_world_points_for_export(predictions)
+    wp = predictions.get("world_points")
+    if wp is None:
+        wp = predictions.get("world_points_from_depth")
+    if wp is None or np.asarray(wp).size == 0:
+        # Truly unrecoverable — depth was missing too. Write an empty
+        # PLY so downstream callers don't error on a missing file.
+        log.warning("ply export: no world_points available; writing empty cloud")
+        cloud = trimesh.PointCloud(np.zeros((0, 3), dtype=np.float32))
+        cloud.export(str(out))
+        return
+    world_points = np.asarray(wp)
     conf = np.asarray(predictions["world_points_conf"])
     images = predictions.get("images")
 
