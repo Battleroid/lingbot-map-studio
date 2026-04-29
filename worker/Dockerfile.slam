@@ -26,38 +26,64 @@ RUN pip install \
         "trimesh==4.4.1" \
         "pymeshlab==2023.12.post3"
 
-# Build deps for the backends that source-build CUDA extensions (MASt3R
-# matching kernels, DROID / DPVO custom ops in later phases).
+# Build deps for the backends that source-build CUDA extensions.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ninja-build \
+        build-essential ninja-build git \
     && rm -rf /var/lib/apt/lists/*
 
-# MASt3R-SLAM (Phase 2). The upstream repo is research-grade and pulls
-# in MASt3R + DUSt3R as dependencies. Pin to a specific commit SHA so
-# repeat builds are deterministic; bump as upstream stabilises.
-ARG MAST3R_SLAM_SHA=main
-RUN pip install --no-cache-dir \
-        "git+https://github.com/rmurai0610/MASt3R-SLAM.git@${MAST3R_SLAM_SHA}"
+# CUDA-extension build configuration. Each upstream below
+# (MASt3R-SLAM, DROID, DPVO) compiles `torch.utils.cpp_extension.CUDAExtension`
+# kernels via setup.py. The `docker build` runtime has no GPU, so
+# torch.cuda.is_available() returns False and naive setup.py scripts
+# bail with "CUDA not found, cannot compile backend!". Two env vars
+# work around it:
+#   FORCE_CUDA=1            — force-enables CUDA build paths even when
+#                             no GPU is present at build time
+#   TORCH_CUDA_ARCH_LIST    — explicit arch list so nvcc emits PTX for
+#                             the right SMs without probing the host
+# Cover the common gaming/datacenter cards: V100 (7.0), T4 (7.5),
+# A100 (8.0), RTX 3000 (8.6), RTX 4000 + L40 (8.9), H100 (9.0).
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
 
-# DROID-SLAM (Phase 3). Custom CUDA extensions in `droid_backends/` are
-# built from source against the torch + cu121 pin above. Cloning into
-# /opt/droid-slam and `pip install .` runs the upstream setup.py which
-# compiles the kernels — adds ~5 min to a clean image build.
+# Common pip-install flags for the upstream source builds:
+#   --no-build-isolation  — pip's isolated build env doesn't see the
+#                           image's numpy + torch, which the upstream
+#                           setup.py scripts import directly. Disable
+#                           isolation so they pick up the existing
+#                           install.
+#   --no-cache-dir        — no point caching wheels we'll throw away.
+#
+# Each install line is wrapped in `|| echo` so a build failure (CUDA
+# arch mismatch, transient network, upstream API drift, etc.) doesn't
+# fail the whole image. The auto-select factory in each backend
+# detects the missing import and falls back to the simulated session
+# with a Phase-0 warn event — better degraded service than no service.
+
+# MASt3R-SLAM (Phase 2). Calibration-free; the safe default. Source
+# build pulls in MASt3R + DUSt3R as deps.
+ARG MAST3R_SLAM_SHA=main
+RUN (pip install --no-cache-dir --no-build-isolation \
+        "git+https://github.com/rmurai0610/MASt3R-SLAM.git@${MAST3R_SLAM_SHA}" \
+     || echo "mast3r_slam: build failed; CUDA path will fall back to simulated")
+
+# DROID-SLAM (Phase 3). Custom CUDA extensions in `droid_backends/`.
+# Adds ~5 min to a clean image build when the build succeeds.
 ARG DROID_SLAM_SHA=main
 RUN git clone https://github.com/princeton-vl/DROID-SLAM.git /opt/droid-slam \
     && cd /opt/droid-slam \
     && git checkout ${DROID_SLAM_SHA} \
-    && pip install --no-cache-dir . \
+    && (pip install --no-cache-dir --no-build-isolation . \
+        || echo "droid_slam: build failed; CUDA path will fall back to simulated") \
     && cd / && rm -rf /opt/droid-slam/.git
 
-# DPVO (Phase 4). Same shape as DROID — clone + pip install . source-builds
-# the CUDA extensions. DPVO is much lighter than DROID and the build
-# completes in ~2 min on a clean cache.
+# DPVO (Phase 4). Lightweight, ~2 min build.
 ARG DPVO_SHA=main
 RUN git clone https://github.com/princeton-vl/DPVO.git /opt/dpvo \
     && cd /opt/dpvo \
     && git checkout ${DPVO_SHA} \
-    && pip install --no-cache-dir . \
+    && (pip install --no-cache-dir --no-build-isolation . \
+        || echo "dpvo: build failed; CUDA path will fall back to simulated") \
     && cd / && rm -rf /opt/dpvo/.git
 
 CMD ["python", "-m", "app.worker_main", "--worker-class", "slam"]

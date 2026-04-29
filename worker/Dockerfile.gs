@@ -11,6 +11,18 @@ FROM ${BASE_IMAGE}
 
 ENV WORKER_CLASS=gs
 
+# CUDA-extension build configuration. The `docker build` runtime has
+# no GPU, so torch.cuda.is_available() returns False and naive
+# setup.py scripts that probe for runtime CUDA bail with "CUDA not
+# found, cannot compile backend!". FORCE_CUDA + an explicit
+# TORCH_CUDA_ARCH_LIST work around it for both gsplat (when it
+# source-builds — the prebuilt wheel covers most cases) and MonoGS's
+# diff-gaussian-rasterization / simple-knn submodules.
+# Cover the common gaming/datacenter cards: V100 (7.0), T4 (7.5),
+# A100 (8.0), RTX 3000 (8.6), RTX 4000 + L40 (8.9), H100 (9.0).
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+
 # gsplat ships prebuilt wheels against cu121 / torch 2.3.
 RUN pip install --index-url https://download.pytorch.org/whl/cu121 \
         "torch==2.3.1" "torchvision==0.18.1"
@@ -54,9 +66,9 @@ ARG MONOGS_SHA=main
 RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     && cd /opt/monogs \
     && git checkout ${MONOGS_SHA} \
-    && (pip install --no-cache-dir submodules/diff-gaussian-rasterization \
+    && (pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
             || echo "monogs: diff-gaussian-rasterization build failed; CUDA path will fall back to simulated") \
-    && (pip install --no-cache-dir submodules/simple-knn \
+    && (pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
             || echo "monogs: simple-knn build failed; CUDA path will fall back to simulated") \
     && rm -rf /opt/monogs/.git
 ENV PYTHONPATH=/opt/monogs:$PYTHONPATH
