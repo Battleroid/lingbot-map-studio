@@ -15,6 +15,9 @@ interface Props {
   jobId: string;
   config: AnyJobConfig | null;
   onRevision: (name: string) => void;
+  /** Forwarded to the dispatched per-mode panel so the user can collapse
+   *  it from the job page's side pane. */
+  collapsible?: boolean;
 }
 
 /**
@@ -27,7 +30,7 @@ interface Props {
  * - Gsplat: splat tools (layer toggles, viewer-side opacity prune,
  *           downloads).
  */
-export function ToolsPanel({ jobId, config, onRevision }: Props) {
+export function ToolsPanel({ jobId, config, onRevision, collapsible }: Props) {
   const { data: manifest } = useJobManifest(jobId);
 
   if (!config) {
@@ -35,7 +38,13 @@ export function ToolsPanel({ jobId, config, onRevision }: Props) {
   }
 
   if (isLingbotConfig(config)) {
-    return <MeshToolsPanel jobId={jobId} onRevision={onRevision} />;
+    return (
+      <MeshToolsPanel
+        jobId={jobId}
+        onRevision={onRevision}
+        collapsible={collapsible}
+      />
+    );
   }
 
   if (isSlamConfig(config)) {
@@ -48,14 +57,28 @@ export function ToolsPanel({ jobId, config, onRevision }: Props) {
           jobId={jobId}
           manifest={manifest}
           onRevision={onRevision}
+          collapsible={collapsible}
         />
-        {hasMesh && <MeshToolsPanel jobId={jobId} onRevision={onRevision} />}
+        {hasMesh && (
+          <MeshToolsPanel
+            jobId={jobId}
+            onRevision={onRevision}
+            collapsible={collapsible}
+          />
+        )}
       </>
     );
   }
 
   if (isGsplatConfig(config)) {
-    return <SplatToolsPanel jobId={jobId} manifest={manifest} onRevision={onRevision} />;
+    return (
+      <SplatToolsPanel
+        jobId={jobId}
+        manifest={manifest}
+        onRevision={onRevision}
+        collapsible={collapsible}
+      />
+    );
   }
 
   return null;

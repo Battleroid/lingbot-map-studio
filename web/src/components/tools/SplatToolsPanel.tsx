@@ -5,12 +5,14 @@ import { useState } from "react";
 import { Tip } from "@/components/Tip";
 import { artifactUrl } from "@/lib/api";
 import type { JobManifest } from "@/lib/types";
+import { useCollapsible } from "@/lib/useCollapsible";
 import { useViewerStore } from "@/lib/viewerStore";
 
 interface Props {
   jobId: string;
   manifest?: JobManifest | null;
   onRevision: (name: string) => void;
+  collapsible?: boolean;
 }
 
 const TIPS = {
@@ -24,7 +26,8 @@ const TIPS = {
     "Download the SOGS sidecar (compressed splat placeholder until the real encoder ships).",
 };
 
-export function SplatToolsPanel({ jobId, manifest }: Props) {
+export function SplatToolsPanel({ jobId, manifest, collapsible }: Props) {
+  const c = useCollapsible({ enabled: collapsible });
   const [busy, setBusy] = useState(false);
   const [_error, setError] = useState<string | null>(null);
   void busy;
@@ -48,9 +51,9 @@ export function SplatToolsPanel({ jobId, manifest }: Props) {
   void setError;
 
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>splat tools</span>
+    <div className="panel" {...c.panelProps}>
+      <div className="panel-header" {...c.headerProps}>
+        <span>{c.arrow}splat tools</span>
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 8 }}>
         <div className="section-title">layers</div>

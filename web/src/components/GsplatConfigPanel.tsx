@@ -2,12 +2,14 @@
 
 import { Tip } from "@/components/Tip";
 import type { GsplatConfig } from "@/lib/types";
+import { useCollapsible } from "@/lib/useCollapsible";
 
 interface Props {
   config: GsplatConfig;
   onChange: (patch: Partial<GsplatConfig>) => void;
   readOnly?: boolean;
   title?: string;
+  collapsible?: boolean;
 }
 
 const TIPS: Record<string, string> = {
@@ -89,11 +91,19 @@ export function GsplatConfigPanel({
   onChange,
   readOnly,
   title,
+  collapsible,
 }: Props) {
+  const c = useCollapsible({
+    enabled: collapsible,
+    initial: Boolean(readOnly),
+  });
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>{title ?? "config · gaussian splat"}</span>
+    <div className="panel" {...c.panelProps}>
+      <div className="panel-header" {...c.headerProps}>
+        <span>
+          {c.arrow}
+          {title ?? "config · gaussian splat"}
+        </span>
         {readOnly && <span className="meta">locked</span>}
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 6 }}>

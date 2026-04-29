@@ -5,11 +5,13 @@ import { useState } from "react";
 import { Tip } from "@/components/Tip";
 import { meshEdit } from "@/lib/api";
 import type { MeshOp } from "@/lib/types";
+import { useCollapsible } from "@/lib/useCollapsible";
 import { useViewerStore } from "@/lib/viewerStore";
 
 interface Props {
   jobId: string;
   onRevision: (name: string) => void;
+  collapsible?: boolean;
 }
 
 const TIPS: Record<MeshOp, string> = {
@@ -32,7 +34,7 @@ function parseRev(name: string): number {
   return m ? Number(m[1]) : 0;
 }
 
-export function MeshTools({ jobId, onRevision }: Props) {
+export function MeshTools({ jobId, onRevision, collapsible }: Props) {
   const selection = useViewerStore((s) => s.selection);
   const clearSelection = useViewerStore((s) => s.clearSelection);
   const meshHistory = useViewerStore((s) => s.meshHistory);
@@ -71,10 +73,11 @@ export function MeshTools({ jobId, onRevision }: Props) {
     }
   }
 
+  const c = useCollapsible({ enabled: collapsible });
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>mesh tools</span>
+    <div className="panel" {...c.panelProps}>
+      <div className="panel-header" {...c.headerProps}>
+        <span>{c.arrow}mesh tools</span>
       </div>
       <div className="panel-body" style={{ display: "grid", gap: 8 }}>
         <Tip text={TIPS.cull} showIcon={false}>
