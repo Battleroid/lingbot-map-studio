@@ -18,6 +18,9 @@ Browser studio for three-mode 3D reconstruction from local video on a local GPU:
 
 ```bash
 cp .env.example .env
+# Build the shared base image first. It's behind a `build` profile so it
+# never runs as a container — api/worker-* just FROM-extend it.
+docker compose --profile build build base
 docker compose build
 docker compose up
 ```

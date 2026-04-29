@@ -1,0 +1,5 @@
+# Bind-mount root for the api + worker containers (./data:/data in docker-compose.yml).
+# Tracked so a fresh clone doesn't have docker auto-create it as root,
+# which on rootless / non-root setups blocks subsequent writes.
+#
+# All runtime files under here (jobs/, uploads/, sqlite db) are gitignored.

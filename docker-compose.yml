@@ -27,8 +27,23 @@ services:
       - models:/models
     ports:
       - "8000:8000"
-    depends_on:
-      - base
+    # NOTE: no `depends_on: - base`. The `base` service is profile-gated
+    # (`profiles: [build]`) so it never *runs* — it exists purely as a
+    # build target for the shared image that api/worker-* FROM-extend.
+    # Compose v2 errors when a depends_on target is excluded by the
+    # active profile, so the link is expressed at build time (the FROM
+    # in Dockerfile.api references `lingbot-studio/base:latest`) rather
+    # than as a runtime dependency. Bootstrap the base image first via
+    # `docker compose --profile build build base` (see README quick start).
+    healthcheck:
+      # Lets workers wait for the SQLite schema to actually exist
+      # (init_store runs in the lifespan hook) instead of merely waiting
+      # for the container process to spawn.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health',timeout=2).status==200 else 1)"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
     ulimits:
       memlock: -1
       stack: 67108864
@@ -58,7 +73,8 @@ services:
       - ./data:/data
       - models:/models
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -96,7 +112,8 @@ services:
       - ./data:/data
       - models:/models
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -131,7 +148,8 @@ services:
       - ./data:/data
       - models:/models
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -157,7 +175,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   # Optional S3-compatible transit bucket for remote workers. Disabled by
   # default; bring up with `docker compose --profile cloud-storage up`.
