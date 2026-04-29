@@ -352,6 +352,30 @@ async def run_inference(
     loop = asyncio.get_running_loop()
     artifacts_dir = frames_dir.parent / "artifacts"
 
+    # Loud warning when the worker container can see torch but not the GPU —
+    # usually a docker `runtime: nvidia` config issue. Without this, lingbot
+    # silently runs on CPU and a job that should take 2 minutes takes 2 hours.
+    # The Device line still goes to stdout via capture_stdio() below, but
+    # that's logged at "stdout" level and is easy to miss in the log pane.
+    # torch is lazy-imported because inference.py is also pulled in by the
+    # api container, which doesn't ship torch.
+    import torch
+    if not torch.cuda.is_available():
+        await publish(
+            JobEvent(
+                job_id=job_id,
+                stage="system",
+                level="warn",
+                message=(
+                    "lingbot: CUDA unavailable — falling back to CPU. "
+                    "Inference will be 50-100x slower. Check that the worker "
+                    "container has `runtime: nvidia` and nvidia-container-toolkit "
+                    "is installed on the host."
+                ),
+                data={"cpu_fallback": True},
+            )
+        )
+
     def _progress(done: int, total: int) -> None:
         if total <= 0:
             return

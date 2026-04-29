@@ -271,6 +271,24 @@ class GsplatProcessor(Processor):
 
         inputs = await self._resolve_inputs(ctx, cfg)
         trainer = self.trainer_cls()
+        # Surface the simulated trainer to the user — the metrics it emits
+        # look real but aren't. The real CUDA trainer (Phase 1) is selected
+        # automatically when the `gsplat` package is importable.
+        if isinstance(trainer, SimulatedSplatTrainer):
+            await ctx.publish(
+                JobEvent(
+                    job_id=ctx.job_id,
+                    stage="system",
+                    level="warn",
+                    message=(
+                        "gsplat: simulated trainer — output is a placeholder, "
+                        "PSNR / loss numbers are synthetic. Install the real "
+                        "`gsplat` package in worker/Dockerfile.gs for real "
+                        "training."
+                    ),
+                    data={"simulated": True},
+                )
+            )
         await asyncio.to_thread(trainer.prepare, inputs, cfg)
         await ctx.publish(
             JobEvent(

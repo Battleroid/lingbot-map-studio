@@ -159,6 +159,25 @@ class SlamProcessor(Processor):
 
         await ctx.set_status("slam")
         session = self._make_session(ctx)
+        # Be honest with the user when we're running the placeholder. The
+        # SimulatedSlamSession produces plausible-looking output for plumbing
+        # tests but isn't real reconstruction — surface that loudly in the log
+        # pane instead of only the container's stderr.
+        from app.processors.slam.tracker import SimulatedSlamSession
+        if isinstance(session, SimulatedSlamSession):
+            await ctx.publish(
+                JobEvent(
+                    job_id=ctx.job_id,
+                    stage="system",
+                    level="warn",
+                    message=(
+                        f"{self.id}: simulated tracker — output is a placeholder. "
+                        f"Install the real upstream package in worker/Dockerfile.slam "
+                        f"for real reconstruction."
+                    ),
+                    data={"backend": self.id, "simulated": True},
+                )
+            )
         result = await self._track(ctx, session, kept_indices)
         ctx.check_cancel()
 
