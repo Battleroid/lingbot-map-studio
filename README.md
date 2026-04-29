@@ -48,6 +48,77 @@ docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull
 docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml up
 ```
 
+## Scanning from a phone — HTTPS setup with mkcert
+
+The `/capture` page uses `navigator.mediaDevices.getUserMedia` to pull
+frames off the phone's camera and stream them to the SLAM tracker live.
+Mobile browsers refuse camera access over plain `http://` (only
+`localhost` is exempt, which you can't loopback into from a phone), so
+the studio needs to be reachable over `https://` for the capture flow
+to work. The default `make up` keeps everything on plain HTTP — that's
+fine for the upload flow on the same machine. Use `make up-https`
+when you actually want to scan from a phone.
+
+The recipe is **mkcert** (a tiny local CA) + **Caddy** as a reverse
+proxy. Caddy is already wired into `docker-compose.yml` under
+`profiles: [https]`; the only manual step is generating + trusting a
+cert pair.
+
+**One-time on the host (laptop / desktop running the studio):**
+
+```bash
+# 1. install mkcert (Debian/Ubuntu)
+sudo apt-get install -y libnss3-tools
+curl -L "https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64" \
+  -o /usr/local/bin/mkcert
+sudo chmod +x /usr/local/bin/mkcert
+mkcert -install
+
+# 2. find the host's LAN IP (e.g. 192.168.1.42)
+ip -4 addr show | awk '/inet 192/ {print $2}'
+
+# 3. generate a cert pair valid for both a friendly name and the LAN IP
+mkdir -p caddy/certs
+mkcert -cert-file caddy/certs/cert.pem \
+       -key-file  caddy/certs/key.pem \
+       studio.local 192.168.1.42
+
+# 4. start the stack with the https profile
+STUDIO_HOSTNAME=studio.local make up-https
+```
+
+**One-time on the phone (Android — iOS notes below):**
+
+1. Copy `$(mkcert -CAROOT)/rootCA.pem` from the host to the phone (USB,
+   AirDrop equivalent, or `python3 -m http.server` over LAN).
+2. Settings → Security → Encryption & credentials → Install a
+   certificate → **CA certificate** → pick the `rootCA.pem` file.
+   Confirm "Install anyway".
+3. Add a hosts entry for `studio.local` → host LAN IP. The simplest
+   way is to skip the friendly name and just open the URL by IP
+   instead (`https://192.168.1.42/capture`); the cert covers both
+   names so either works.
+
+Open `https://studio.local/capture` (or the IP form) from the phone's
+browser. The browser should accept the cert without warnings; the page
+will prompt for camera access, you tap allow, and the live preview
+kicks off.
+
+**iOS:** the flow is the same but the cert install lives at General →
+VPN & Device Management, and you also have to flip a separate switch
+under General → About → Certificate Trust Settings to fully trust the
+mkcert root. Apple does this on purpose to make user-installed CAs
+slightly less dangerous.
+
+**Why mkcert and not Let's Encrypt / Caddy auto-HTTPS?** Both
+alternatives need a publicly-resolvable hostname and inbound port 80.
+The studio is intended to run on a LAN behind a home router, so
+self-signed via a locally-trusted CA is the path with the fewest
+moving parts. If you do expose the studio to the public internet
+(via Cloudflare Tunnel, Tailscale Funnel, or a real VPS) you can
+delete the `tls /certs/...` line from `caddy/Caddyfile` and Caddy
+will provision a Let's Encrypt cert automatically.
+
 ## What to expect on the first job
 
 The worker lazy-downloads checkpoints from `huggingface.co/robbyant/lingbot-map` into a named Docker volume. The download progress streams into the log pane on the job page. Subsequent jobs reuse the cached checkpoint.

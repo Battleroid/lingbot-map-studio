@@ -178,6 +178,38 @@ services:
       api:
         condition: service_healthy
 
+  # Optional HTTPS reverse proxy. Off by default — `make up` keeps both
+  # services on plain http://localhost like before. Bring it up alongside
+  # the rest of the stack with `make up-https` (or `docker compose
+  # --profile https up`) once you've dropped a mkcert-issued cert pair
+  # into ./caddy/certs/{cert,key}.pem. The README walkthrough has the
+  # full mkcert + Android trust recipe; the short version is:
+  #   mkcert -install
+  #   mkcert -cert-file caddy/certs/cert.pem -key-file caddy/certs/key.pem \
+  #          studio.local 192.168.1.42
+  #   STUDIO_HOSTNAME=studio.local make up-https
+  # Required for `getUserMedia` (and therefore /capture) to work on a
+  # phone — mobile browsers refuse the camera prompt over plain http.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${STUDIO_TLS_DIR:-./caddy/certs}:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      STUDIO_HOSTNAME: ${STUDIO_HOSTNAME:-studio.local}
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    restart: unless-stopped
+
   # Optional S3-compatible transit bucket for remote workers. Disabled by
   # default; bring up with `docker compose --profile cloud-storage up`.
   # When enabled, set CLOUD_STORAGE=minio on the api service so the broker
@@ -224,3 +256,5 @@ services:
 volumes:
   models:
   minio:
+  caddy-data:
+  caddy-config:

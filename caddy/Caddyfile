@@ -1,0 +1,27 @@
+# Caddy reverse proxy for serving the studio over HTTPS on the LAN so a
+# phone (or any second device) can hit /capture and have the browser
+# accept getUserMedia. Without HTTPS, mobile browsers refuse the camera
+# request — only `localhost` is exempt, and you can't loopback from a
+# phone.
+#
+# Wired up with mkcert: install mkcert + its root CA on the host once,
+# trust the same CA on the phone (Settings → Security → Install
+# certificate → CA), and Caddy serves the mkcert-issued cert here.
+# Both /api/* (FastAPI + WebSocket) and the rest (Next.js) are proxied
+# through the same hostname so the browser sees one origin and the
+# capture WS stays same-origin (no cors headache).
+#
+# Override the hostname via `STUDIO_HOSTNAME=studio.local make up-https`;
+# default `studio.local` matches the README walkthrough.
+
+{$STUDIO_HOSTNAME:studio.local} {
+	tls /certs/cert.pem /certs/key.pem
+
+	# FastAPI mounts everything under /api (HTTP + the capture / job
+	# WebSockets). Caddy upgrades WS automatically when the client sends
+	# the Upgrade header — no extra config needed.
+	reverse_proxy /api/* api:8000
+
+	# Next.js serves the rest (pages, _next/* assets, public/).
+	reverse_proxy * web:3000
+}
