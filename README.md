@@ -16,16 +16,30 @@ Browser studio for three-mode 3D reconstruction from local video on a local GPU:
 
 ## Quick start
 
+Pre-built images are published to GHCR after every green CI run. The
+default `make up` pulls them — no local build required.
+
 ```bash
-cp .env.example .env
-# Build the shared base image first. It's behind a `build` profile so it
-# never runs as a container — api/worker-* just FROM-extend it.
-docker compose --profile build build base
-docker compose build
-docker compose up
+make doctor   # one-time: confirm docker + gpu + nvidia-container-toolkit
+make up       # pull ghcr.io images + start (foreground)
 ```
 
 Open http://localhost:3000.
+
+If you're hacking on the worker / api / web code and want to build from
+source instead of pulling, use `make up-build` (slow first run, ~5 min
+for the shared base image alone).
+
+Run `make help` for the full target list (`down`, `logs`, `restart`,
+`shell-api`, `clean`, …).
+
+The Makefile is a thin wrapper over Compose. You can drop down to
+`docker compose` directly any time:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml up
+```
 
 ## What to expect on the first job
 
