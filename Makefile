@@ -54,18 +54,21 @@ up-d: .env ## same as up, but daemonized
 	@echo "    tail logs: make logs"
 	@echo "    stop:      make down"
 
-# Internal: build the shared base image if it isn't already cached. Only
-# the from-source path needs it; the GHCR images each carry their own
-# pinned base layer.
-.PHONY: _ensure-base
-_ensure-base:
-	@if ! docker image inspect lingbot-studio/base:latest >/dev/null 2>&1; then \
-		echo "[+] building base image (one-time, ~5min on first run)..."; \
-		$(COMPOSE) --profile build build base; \
-	fi
-
-up-build: .env _ensure-base ## build images from source + start (slow first run)
-	$(COMPOSE) build
+# `up-build` always rebuilds the shared base image alongside the
+# downstream images. Earlier versions skipped the base rebuild whenever
+# `lingbot-studio/base:latest` was already present locally, which meant
+# a stale base lingered across pulls — downstream images would FROM it
+# and silently miss new shared deps (e.g. an `httpx` install added to
+# Dockerfile.base wouldn't reach api or workers). Docker's own layer
+# cache still kicks in for unchanged RUN lines, so a no-op rebuild is
+# fast; only edits to Dockerfile.base or its inputs trigger real work.
+#
+# `--profile build` activates the `base` service (which carries
+# `profiles: [build]`) without enabling it for `up`. So we get base +
+# every default-profile service (api, worker-*, web) built in one shot,
+# and the subsequent `up` ignores the build-only base.
+up-build: .env ## build images from source + start (slow first run)
+	$(COMPOSE) --profile build build
 	$(COMPOSE) up
 
 down: ## stop + remove containers (keeps named volumes)
