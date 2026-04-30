@@ -52,6 +52,16 @@ interface CaptureState {
   stats: CaptureStats;
   error: string | null;
 
+  // Reconnect bookkeeping. `reconnectAttempt` is 0 while connected /
+  // idle and >0 while a retry is scheduled or in flight (used in the
+  // UI to show "reconnecting…" copy + a counter). `reconnectTimer`
+  // holds the pending setTimeout id so user-initiated stop can cancel
+  // a pending retry. `userInitiatedClose` distinguishes "I tapped
+  // stop" (don't reconnect) from "the network blipped" (do reconnect).
+  reconnectAttempt: number;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  userInitiatedClose: boolean;
+
   // Actions
   open: (sessionId: string) => void;
   close: () => void;
@@ -61,6 +71,13 @@ interface CaptureState {
 }
 
 const INITIAL_POINT_CAPACITY = 4096;
+
+// Reconnect backoff schedule. Doubles each attempt: 1, 2, 4, 8, 16 s
+// for a total of ~31 s of retries before we give up. That window
+// matches the server's 60 s idle timeout (capture_session.py:54), so
+// a session staying alive across a reconnect is the common case rather
+// than the exception.
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
 
 const makeXyz = (cap: number) => new Float32Array(cap * 3);
 const makeRgb = (cap: number) => new Float32Array(cap * 3);
@@ -77,52 +94,43 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   voxels: new Map(),
   stats: { frames: 0, queued: 0, dropped: 0 },
   error: null,
+  reconnectAttempt: 0,
+  reconnectTimer: null,
+  userInitiatedClose: false,
 
   open: (sessionId: string) => {
-    const ws = new WebSocket(captureWsUrl(sessionId));
-    ws.binaryType = "arraybuffer";
-    set({ status: "connecting", sessionId, error: null, ws });
-
-    ws.addEventListener("open", () => set({ status: "open" }));
-    ws.addEventListener("close", () => set({ status: "closed" }));
-    ws.addEventListener("error", () =>
-      set({ status: "closed", error: "websocket error" }),
-    );
-    ws.addEventListener("message", (evt) => {
-      try {
-        const msg = JSON.parse(evt.data as string) as {
-          type: string;
-          data: { [k: string]: unknown };
-        };
-        if (msg.type === "pose") {
-          const pose = msg.data as unknown as CapturePose;
-          set((s) => ({ poses: [...s.poses, pose] }));
-        } else if (msg.type === "points") {
-          const rows = (msg.data["new"] as number[][]) || [];
-          appendPoints(rows, get, set);
-        } else if (msg.type === "stats") {
-          set({ stats: msg.data as unknown as CaptureStats });
-        } else if (msg.type === "error") {
-          set({ error: String(msg.data["message"] ?? "capture error") });
-        }
-      } catch {
-        /* drop malformed */
-      }
+    // Fresh connect attempt. Clear any retry bookkeeping from a prior
+    // session that ended without an explicit reset.
+    const { reconnectTimer } = get();
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    set({
+      sessionId,
+      error: null,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
+      userInitiatedClose: false,
     });
+    connectWs(sessionId, set, get);
   },
 
   close: () => {
-    const { ws } = get();
+    const { ws, reconnectTimer } = get();
+    // Mark this as user-initiated *before* closing the socket so the
+    // close handler doesn't kick off a reconnect.
+    set({ userInitiatedClose: true });
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
     try {
       ws?.close();
     } catch {
       /* noop */
     }
-    set({ ws: null, status: "closed" });
+    set({ ws: null, status: "closed", reconnectTimer: null });
   },
 
   reset: () => {
-    const { ws } = get();
+    const { ws, reconnectTimer } = get();
+    set({ userInitiatedClose: true });
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
     try {
       ws?.close();
     } catch {
@@ -139,6 +147,9 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       voxels: new Map(),
       stats: { frames: 0, queued: 0, dropped: 0 },
       error: null,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
+      userInitiatedClose: false,
     });
   },
 
@@ -174,6 +185,94 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     });
   },
 }));
+
+/** Build a fresh WebSocket for `sessionId` and wire its handlers to
+ *  the store. Called from `open()` (first connect) and from the retry
+ *  timer (subsequent attempts) — both paths share this code so the
+ *  message-decoding logic only lives in one place. */
+function connectWs(
+  sessionId: string,
+  set: (
+    partial:
+      | Partial<CaptureState>
+      | ((s: CaptureState) => Partial<CaptureState>),
+  ) => void,
+  get: () => CaptureState,
+): void {
+  const ws = new WebSocket(captureWsUrl(sessionId));
+  ws.binaryType = "arraybuffer";
+  set({ status: "connecting", ws });
+
+  ws.addEventListener("open", () => {
+    // First-attempt or reconnect — either way we're live again, so
+    // surface "open" + clear the retry counter so the UI stops
+    // showing "reconnecting (n/N)".
+    set({ status: "open", reconnectAttempt: 0, error: null });
+  });
+
+  // We schedule the retry from `close` rather than `error` because a
+  // remote drop fires `close` after `error`, and reacting to `error`
+  // alone would race with the "is this user-initiated?" check below.
+  ws.addEventListener("error", () => {
+    /* noop — close handles the retry */
+  });
+
+  ws.addEventListener("close", () => {
+    const state = get();
+    // User pressed Stop / navigated away — honour that.
+    if (state.userInitiatedClose) {
+      set({ ws: null, status: "closed" });
+      return;
+    }
+    // Out of retries → surface the failure and stop trying.
+    if (state.reconnectAttempt >= RECONNECT_DELAYS_MS.length) {
+      set({
+        ws: null,
+        status: "closed",
+        error: `lost connection after ${RECONNECT_DELAYS_MS.length} retries`,
+      });
+      return;
+    }
+    // Schedule the next attempt.
+    const delay = RECONNECT_DELAYS_MS[state.reconnectAttempt];
+    const timer = setTimeout(() => {
+      // The user may have stopped during the wait — bail out cleanly.
+      const cur = get();
+      if (cur.userInitiatedClose) return;
+      connectWs(sessionId, set, get);
+    }, delay);
+    set({
+      ws: null,
+      // Status stays "connecting" for the duration of the backoff so
+      // the UI can show "reconnecting (n/5) …" without a status flap.
+      status: "connecting",
+      reconnectAttempt: state.reconnectAttempt + 1,
+      reconnectTimer: timer,
+    });
+  });
+
+  ws.addEventListener("message", (evt) => {
+    try {
+      const msg = JSON.parse(evt.data as string) as {
+        type: string;
+        data: { [k: string]: unknown };
+      };
+      if (msg.type === "pose") {
+        const pose = msg.data as unknown as CapturePose;
+        set((s) => ({ poses: [...s.poses, pose] }));
+      } else if (msg.type === "points") {
+        const rows = (msg.data["new"] as number[][]) || [];
+        appendPoints(rows, get, set);
+      } else if (msg.type === "stats") {
+        set({ stats: msg.data as unknown as CaptureStats });
+      } else if (msg.type === "error") {
+        set({ error: String(msg.data["message"] ?? "capture error") });
+      }
+    } catch {
+      /* drop malformed */
+    }
+  });
+}
 
 function appendPoints(
   rows: number[][],
@@ -223,3 +322,7 @@ function appendPoints(
     voxels,
   });
 }
+
+/** Number of reconnect attempts the store will make before giving up.
+ *  Exposed for the UI to render `reconnecting (n/N)…`. */
+export const MAX_RECONNECT_ATTEMPTS = RECONNECT_DELAYS_MS.length;
