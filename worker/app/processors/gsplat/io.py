@@ -60,7 +60,15 @@ def resolve_inputs(source_job: Job) -> GsplatInputs:
         )
 
     frames_dir = settings.job_frames(source_job.id)
-    if not frames_dir.exists() or not any(frames_dir.glob("*.png")):
+    # Glob both .png (ffmpeg-extracted, the original ingest path) and
+    # .jpg (capture-derived, written straight from the phone's WS
+    # payload). Without the .jpg arm a captured-then-completed source
+    # job would 409 with "no extracted frames" even though the JPEGs
+    # are sitting right there on disk.
+    has_frames = frames_dir.exists() and (
+        any(frames_dir.glob("*.png")) or any(frames_dir.glob("*.jpg"))
+    )
+    if not has_frames:
         raise GsplatInputsError(
             f"source job {source_job.id} has no extracted frames — "
             "reingest or pick a different source"

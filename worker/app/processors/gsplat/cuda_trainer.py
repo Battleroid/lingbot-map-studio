@@ -279,7 +279,12 @@ class GsplatCudaTrainer(SplatTrainer):
                 "from the source job; none found."
             )
         cameras = splat_io.load_cameras(inputs.cameras_path)
-        self._frame_paths = sorted(inputs.frames_dir.glob("*.png"))
+        # Both extensions: .png from ffmpeg-extracted ingest, .jpg
+        # from the live-capture path that streams phone frames
+        # straight to disk. The two never coexist in one job dir.
+        self._frame_paths = sorted(inputs.frames_dir.glob("*.png")) + sorted(
+            inputs.frames_dir.glob("*.jpg")
+        )
         if not self._frame_paths:
             raise RuntimeError(
                 f"GsplatCudaTrainer: no frames in {inputs.frames_dir}"
