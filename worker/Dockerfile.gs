@@ -113,6 +113,18 @@ ARG MONOGS_SHA=main
 RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     && cd /opt/monogs \
     && git checkout ${MONOGS_SHA} \
+    # Patch simple_knn.cu to include <float.h>. Upstream
+    # (gitlab.inria.fr/bkerbl/simple-knn) uses `FLT_MAX` without
+    # an explicit include; CUDA <12 implicitly pulled it in via
+    # crt headers, but CUDA 12.8 (our base image) doesn't, and
+    # the build fails with "identifier "FLT_MAX" is undefined" at
+    # simple_knn.cu(90) and (154). Inserting `#include <float.h>`
+    # at the top of the file is the upstream-issue's standard
+    # fix and idempotent if applied twice. Without this patch the
+    # post-stop MonoGS jobs blow up at first frame with
+    # `ModuleNotFoundError: No module named 'simple_knn'` because
+    # the wheel never builds.
+    && sed -i '1i #include <float.h>' submodules/simple-knn/simple_knn.cu \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git
