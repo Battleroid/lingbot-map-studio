@@ -1190,6 +1190,37 @@ async def capture_stop(session_id: str) -> dict[str, Any]:
     return {"job_id": result.job_id}
 
 
+@app.get("/api/capture/{session_id}/preview/{name}")
+async def capture_preview(session_id: str, name: str) -> Response:
+    """Serve the live splat-preview file produced by an active capture
+    session. The capture WS emits a `partial_splat` event each time the
+    SLAM session re-snapshots its sparse cloud; the client refetches
+    this URL with a busted cache key (`?v=<n>`) and pipes it into the
+    same `SplatLayer` the job page uses.
+
+    Restricted to `splat.ply` for now — the preview dir only ever
+    contains that file plus the post-finalize MonoGS output. The
+    explicit allowlist keeps this from accidentally turning into a
+    path-traversal-friendly file server."""
+    from app.cloud.capture_session import manager as capture_manager
+
+    if name != "splat.ply":
+        return JSONResponse(
+            status_code=404, content={"detail": "no such preview"}
+        )
+    session = capture_manager.get(session_id)
+    if session is None:
+        return JSONResponse(
+            status_code=404, content={"detail": "no such session"}
+        )
+    target = session.preview_dir / name
+    if not target.exists():
+        return JSONResponse(
+            status_code=404, content={"detail": "preview not yet written"}
+        )
+    return FileResponse(target, media_type="application/octet-stream")
+
+
 @app.exception_handler(Exception)
 async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
     log.exception("unhandled error")

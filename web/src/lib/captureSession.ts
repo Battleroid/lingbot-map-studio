@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import { captureWsUrl } from "@/lib/api";
+import { capturePreviewSplatUrl, captureWsUrl } from "@/lib/api";
 
 /**
  * Live camera-capture client state.
@@ -65,6 +65,13 @@ interface CaptureState {
   // their connection is the bottleneck.
   framesDroppedClient: number;
 
+  // URL to the latest splat-preview snapshot the server has written,
+  // or `null` while we're still waiting for the first one. Updated on
+  // each `partial_splat` event the WS pumps in. The url's query
+  // param is incremented each time so the SplatLayer's `useEffect`
+  // sees a fresh dependency and re-fetches.
+  latestSplatPreview: string | null;
+
   // Reconnect bookkeeping. `reconnectAttempt` is 0 while connected /
   // idle and >0 while a retry is scheduled or in flight (used in the
   // UI to show "reconnecting…" copy + a counter). `reconnectTimer`
@@ -109,6 +116,7 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   error: null,
   framesSent: 0,
   framesDroppedClient: 0,
+  latestSplatPreview: null,
   reconnectAttempt: 0,
   reconnectTimer: null,
   userInitiatedClose: false,
@@ -164,6 +172,7 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       error: null,
       framesSent: 0,
       framesDroppedClient: 0,
+      latestSplatPreview: null,
       reconnectAttempt: 0,
       reconnectTimer: null,
       userInitiatedClose: false,
@@ -286,6 +295,17 @@ function connectWs(
         appendPoints(rows, get, set);
       } else if (msg.type === "stats") {
         set({ stats: msg.data as unknown as CaptureStats });
+      } else if (msg.type === "partial_splat") {
+        // Server has written a fresh splat preview to disk. Build
+        // a cache-busted URL the SplatLayer can fetch — the
+        // `preview` counter the server emits doubles as the
+        // version number, so we just pass it through.
+        const cur = get();
+        if (cur.sessionId == null) return;
+        const version = Number(msg.data["preview"] ?? Date.now());
+        set({
+          latestSplatPreview: capturePreviewSplatUrl(cur.sessionId, version),
+        });
       } else if (msg.type === "error") {
         set({ error: String(msg.data["message"] ?? "capture error") });
       }

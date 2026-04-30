@@ -40,13 +40,22 @@ def _resolve_cls(backend_id: str) -> type[SlamSession]:
     if backend_id == "dpvo":
         from app.processors.slam.dpvo import select_session_cls
         return select_session_cls()
+    if backend_id == "monogs":
+        # MonoGS lives under app/processors/gsplat/ but exposes the
+        # SlamSession contract — its draw is producing a Gaussian Splat
+        # while it tracks, which is the headline reason a user reaches
+        # for the live-capture flow in the first place. Same auto-
+        # select pattern as the SLAM backends: real CUDA when
+        # importable, simulated otherwise.
+        from app.processors.gsplat.monogs import select_session_cls
+        return select_session_cls()
     # Unknown backend → simulated. Captures still produce a poseable
     # result, just without real reconstruction quality.
     from app.processors.slam.tracker import SimulatedSlamSession
     return SimulatedSlamSession
 
 
-SUPPORTED_BACKENDS = ("mast3r_slam", "droid_slam", "dpvo")
+SUPPORTED_BACKENDS = ("mast3r_slam", "droid_slam", "dpvo", "monogs")
 
 
 def is_supported(backend_id: Optional[str]) -> bool:

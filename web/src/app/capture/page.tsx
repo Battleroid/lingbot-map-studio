@@ -11,6 +11,7 @@ import {
   CoverageVoxels,
   useCoverageSummary,
 } from "@/components/capture/CoverageVoxels";
+import { SplatLayer } from "@/components/Viewer/SplatLayer";
 import {
   startCaptureSession,
   stopCaptureSession,
@@ -52,6 +53,7 @@ export default function CapturePage() {
   const reconnectAttempt = useCaptureStore((s) => s.reconnectAttempt);
   const framesSent = useCaptureStore((s) => s.framesSent);
   const framesDroppedClient = useCaptureStore((s) => s.framesDroppedClient);
+  const latestSplatPreview = useCaptureStore((s) => s.latestSplatPreview);
 
   // "open" or actively retrying — both are flavours of an in-progress
   // session, so treat them as `capturing` for the purpose of which
@@ -188,7 +190,17 @@ export default function CapturePage() {
           <directionalLight position={[3, 5, 2]} intensity={0.6} />
           <Bounds margin={1.4} observe>
             <CoverageVoxels />
-            <CapturePointCloud />
+            {/* Splat preview when the server has written one;
+                otherwise fall back to the raw point cloud so the
+                user always sees *something* growing. SplatLayer
+                renders the same xyz positions as gaussians, so once
+                the first splat snapshot arrives (~2 s in) we hide
+                the points to avoid double-render. */}
+            {latestSplatPreview ? (
+              <SplatLayer url={latestSplatPreview} />
+            ) : (
+              <CapturePointCloud />
+            )}
             <CaptureFrustum />
           </Bounds>
           <axesHelper args={[0.3]} />
@@ -264,6 +276,11 @@ export default function CapturePage() {
           <option value="mast3r_slam">mast3r-slam (default)</option>
           <option value="droid_slam">droid-slam</option>
           <option value="dpvo">dpvo</option>
+          {/* MonoGS: produces a real Gaussian Splat as it tracks. The
+              capture session feeds it the same frame stream + writes
+              a live splat preview to disk, which the canvas above
+              renders via SplatLayer. */}
+          <option value="monogs">monogs (gaussian splat)</option>
         </select>
         {devices.length > 1 && (
           <select
