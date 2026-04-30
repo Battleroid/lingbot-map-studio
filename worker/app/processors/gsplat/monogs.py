@@ -1,26 +1,43 @@
 """MonoGS / Photo-SLAM backend.
 
-Emits a 3D Gaussian Splat scene incrementally as it tracks uploaded
-footage, end-to-end in a single job. Lives under the Gaussian Splat tab
-as an alternate backend to `gsplat.trainer` — same output artifact
-(`splat.ply`), different input shape: MonoGS starts from raw frames,
-gsplat trains off a completed SLAM/Lingbot source job.
+Emits a 3D Gaussian Splat scene end-to-end from uploaded footage. Lives
+under the Gaussian Splat tab as an alternate backend to
+`gsplat.trainer` — same output artifact (`splat.ply`), different input
+shape: MonoGS starts from raw frames, gsplat trains off a completed
+SLAM/Lingbot source job.
 
-Runs in the `worker-gs` container alongside `gsplat.trainer` so they
-share CUDA/torch matrices. Until upstream MonoGS is installed we fall
-back to the simulated tracker + synthesise a tiny splat PLY from its
-point cloud so the downstream splat tools have something to exercise.
+Runs in the `worker-gs` container. The processor invokes upstream MonoGS
+as a subprocess via `monogs_batch.run_monogs_batch`: builds a TUM-shaped
+workspace from the extracted frames, generates a YAML config, runs
+`slam.py`, and copies the resulting splat PLY into the job's artifacts.
+
+Why batch and not streaming: upstream `muskie82/MonoGS` doesn't expose a
+per-frame `process_frame` API. Its only entrypoint is
+`slam.SLAM(config)`, a multi-process driver that reads a Dataset off
+disk and runs frontend tracking + backend mapping until the dataset is
+exhausted. A streaming wrapper would require a custom Dataset feeding
+upstream's frontend Process pair via mp.Queue (see `monogs_streaming.py`
+for that path; it's used by the live capture preview). The batch
+wrapper is the simpler shape for the post-stop reconstruction job.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import ClassVar, Optional
 
 import numpy as np
 
-from app.processors.slam.base import FinalResult, SlamProcessor, SlamSession
+from app.jobs.schema import JobEvent
+from app.processors.slam.base import (
+    FinalResult,
+    SlamProcessor,
+    SlamSession,
+    _build_intrinsics,
+    _resolve_frame_paths,
+)
 from app.processors.slam.tracker import SimulatedSlamSession
 
 log = logging.getLogger(__name__)
@@ -77,9 +94,42 @@ class _MonogsSession(SimulatedSlamSession):
         return out
 
 
+class _NoopSession(SlamSession):
+    """Stub session for `MonogsProcessor`.
+
+    `MonogsProcessor` overrides `_track` to drive upstream MonoGS as a
+    subprocess (see `monogs_batch.run_monogs_batch`); it never calls
+    `start` / `step` / `finalize` on the session. The base class's
+    `run()` method still constructs a session via `_make_session`
+    before passing it down, and `_export` reads `session.trajectory_only`
+    off it, so the stub has to satisfy those two contracts."""
+
+    backend_id: ClassVar[str] = "monogs"
+
+    def start(self, intrinsics, image_shape) -> None:  # noqa: D401, ARG002
+        return
+
+    def step(self, idx, img):  # noqa: D401, ARG002
+        from app.processors.slam.base import FrameUpdate
+        return FrameUpdate()
+
+    def finalize(self) -> FinalResult:  # noqa: D401
+        return FinalResult(
+            poses=np.empty((0, 4, 4), dtype=np.float32),
+            keyframe_indices=[],
+            points=None,
+            diagnostics={"backend": "monogs", "noop": True},
+        )
+
+
 class MonogsProcessor(SlamProcessor):
     """MonoGS (Photo-SLAM variant). Produces a splat alongside the usual
-    trajectory + cloud."""
+    trajectory + cloud.
+
+    Bypasses the streaming SlamSession surface that DROID / DPVO /
+    MASt3R-SLAM use because upstream MonoGS isn't streaming-shaped.
+    `_track` runs upstream as a subprocess via the batch wrapper and
+    builds a `FinalResult` from the resulting splat PLY + trajectory."""
 
     id: ClassVar[str] = "monogs"  # type: ignore[assignment]
     display_name: ClassVar[str] = "MonoGS"
@@ -88,14 +138,81 @@ class MonogsProcessor(SlamProcessor):
     )
 
     def _make_session(self, ctx) -> SlamSession:  # type: ignore[override]
-        cls = select_session_cls()
-        session = cls()
-        # Both the simulated and CUDA sessions accept an artifact_dir
-        # via `set_artifact_dir`; the processor uses it to write the
-        # splat PLY at finalize() time.
-        if hasattr(session, "set_artifact_dir"):
-            session.set_artifact_dir(ctx.artifacts_dir)
-        return session
+        return _NoopSession()
+
+    async def _track(  # type: ignore[override]
+        self,
+        ctx,
+        session: SlamSession,
+        indices: list[int],
+    ) -> FinalResult:
+        # Lazy import — `monogs_batch` pulls in `yaml` which lives only
+        # in the worker-gs / api images, and this file is otherwise
+        # importable from any worker container.
+        from app.processors.gsplat import monogs_batch  # noqa: PLC0415
+        import cv2  # noqa: PLC0415
+
+        cfg = ctx.config
+        frame_paths = _resolve_frame_paths(ctx.frames_dir, indices)
+        if not frame_paths:
+            raise RuntimeError("monogs: no frames to reconstruct")
+
+        first = cv2.imread(str(frame_paths[0]))
+        if first is None:
+            raise RuntimeError(
+                f"monogs: could not read seed frame {frame_paths[0]}"
+            )
+        h, w = first.shape[:2]
+        intrinsics = _build_intrinsics(cfg, w=w, h=h)
+
+        workspace = ctx.artifacts_dir / ".monogs_workspace"
+        try:
+            result = await monogs_batch.run_monogs_batch(
+                job_id=ctx.job_id,
+                frame_paths=frame_paths,
+                intrinsics=intrinsics,
+                image_shape=(h, w),
+                workspace_root=workspace,
+                publish=ctx.publish,
+                fps=float(getattr(cfg, "fps", 10.0) or 10.0),
+            )
+        except monogs_batch.MonogsBatchUnavailableError as exc:
+            await ctx.publish(
+                JobEvent(
+                    job_id=ctx.job_id,
+                    stage="system",
+                    level="error",
+                    message=str(exc),
+                    data={"missing_dep": "monogs"},
+                )
+            )
+            raise
+
+        # Trajectory may be missing on very short clips. Fall back to a
+        # single identity pose so the export pipeline can still write a
+        # pose_graph.json (the splat itself is the primary artifact).
+        if result.trajectory is None or result.trajectory.shape[0] == 0:
+            poses = np.eye(4, dtype=np.float32)[None]
+            keyframe_indices = [0]
+        else:
+            poses = result.trajectory
+            keyframe_indices = result.keyframe_indices or list(
+                range(poses.shape[0])
+            )
+
+        return FinalResult(
+            poses=poses,
+            keyframe_indices=keyframe_indices,
+            points=None,  # MonoGS's primary output is the splat PLY.
+            splat_ply_path=result.splat_ply,
+            diagnostics={
+                "backend": "monogs",
+                "splat_source": "monogs_cuda",
+                "n_poses": int(poses.shape[0]),
+                "image_width": int(w),
+                "image_height": int(h),
+            },
+        )
 
 
 class MonogsSessionUnavailableError(RuntimeError):

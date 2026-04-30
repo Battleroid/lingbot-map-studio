@@ -75,15 +75,23 @@ def _resolve_cls(backend_id: str) -> type[SlamSession]:
         except DpvoUnavailableError:
             return _DpvoSession
     if backend_id == "monogs":
-        from app.processors.gsplat.monogs import (
-            MonogsSessionUnavailableError,
-            _MonogsSession,
-            select_session_cls,
+        # MonoGS is a special case: upstream doesn't expose a streaming
+        # SLAM API, so the regular `select_session_cls()` raises (it's
+        # used by the post-stop batch processor too, which now drives
+        # `slam.py` as a subprocess via `monogs_batch.run_monogs_batch`).
+        # For the live preview we wrap upstream's `slam.SLAM` in-process
+        # via a queue-fed Dataset — see `monogs_streaming.py`. Falls
+        # back to the simulated session on a CPU-only host or when
+        # the upstream module isn't importable.
+        from app.processors.gsplat.monogs import _MonogsSession
+        from app.processors.gsplat.monogs_streaming import (
+            MonogsStreamingUnavailableError,
+            select_streaming_session_cls,
         )
 
         try:
-            return select_session_cls()
-        except MonogsSessionUnavailableError:
+            return select_streaming_session_cls()
+        except MonogsStreamingUnavailableError:
             return _MonogsSession
     # Unknown backend → simulated. Captures still produce a poseable
     # result for the live preview; the post-stop job will fail at
