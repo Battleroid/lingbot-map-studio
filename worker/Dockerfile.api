@@ -79,6 +79,13 @@ ARG MONOGS_SHA=main
 RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     && cd /opt/monogs \
     && git checkout ${MONOGS_SHA} \
+    # Patch simple_knn.cu to include <float.h>. Upstream uses
+    # `FLT_MAX` without an explicit include; CUDA <12 implicitly
+    # pulled it in via crt headers, but CUDA 12.8 (our base image)
+    # doesn't, and the build fails with "identifier "FLT_MAX" is
+    # undefined" at simple_knn.cu(90) and (154). Same patch
+    # Dockerfile.gs applies — keep them in lockstep.
+    && sed -i '1i #include <float.h>' submodules/simple-knn/simple_knn.cu \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git
