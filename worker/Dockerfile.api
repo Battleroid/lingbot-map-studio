@@ -98,6 +98,10 @@ RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     # applies — keep them in lockstep. See Dockerfile.gs for the full
     # rationale.
     && sed -i 's|^from gui import gui_utils, slam_gui$|from gui import gui_utils\nimport types as _t\nslam_gui = _t.SimpleNamespace(run=lambda *a, **kw: None)|' slam.py \
+    # Patch `dtype=np.unicode_` → `dtype=np.str_` in utils/dataset.py.
+    # NumPy 2.0 removed `np.unicode_`; same fix Dockerfile.gs applies —
+    # keep them in lockstep.
+    && sed -i 's|dtype=np\.unicode_|dtype=np.str_|g' utils/dataset.py \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git

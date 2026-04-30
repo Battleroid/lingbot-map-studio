@@ -150,6 +150,15 @@ RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     # `ModuleNotFoundError: No module named 'glfw'` six lines into
     # slam.py's imports.
     && sed -i 's|^from gui import gui_utils, slam_gui$|from gui import gui_utils\nimport types as _t\nslam_gui = _t.SimpleNamespace(run=lambda *a, **kw: None)|' slam.py \
+    # Patch upstream's `dtype=np.unicode_` use in `utils/dataset.py:55`.
+    # `np.unicode_` was removed in NumPy 2.0 (NEP 51); upstream MonoGS
+    # is research code from a pre-numpy-2 era. The replacement
+    # `np.str_` is the official 2.x equivalent and works fine on
+    # numpy 1.x too, so the patch is forward+backward compatible.
+    # Without this the TUMParser blows up at the first `parse_list`
+    # call with `AttributeError: 'np.unicode_' was removed in the
+    # NumPy 2.0 release`. Idempotent: second run finds no match.
+    && sed -i 's|dtype=np\.unicode_|dtype=np.str_|g' utils/dataset.py \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git
