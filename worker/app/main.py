@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
+
+# cv2 + numpy are imported eagerly here even though only the live-
+# capture WS handler uses them. The previous lazy-inside-the-handler
+# pattern silently failed when the api container didn't have opencv
+# installed (every frame raised `ModuleNotFoundError` and got logged
+# + skipped, leaving the user with a 0-frame capture and no clue).
+# Moving the import to module top turns a missing dep into "the api
+# container won't even start" — caught the moment the image is built,
+# not on first scan.
+import cv2  # noqa: F401  (re-imported by the WS handler)
+import numpy as np  # noqa: F401
 
 from fastapi import (
     FastAPI,
@@ -1085,9 +1097,6 @@ async def capture_stream(ws: WebSocket, session_id: str) -> None:
     """Bidirectional WS. Binary inbound = JPEG frame; text outbound =
     JSON `EmitMessage` from the server side.
     """
-    import json
-    import numpy as np
-
     from app.cloud.capture_session import manager as capture_manager
 
     session = capture_manager.get(session_id)
@@ -1117,11 +1126,6 @@ async def capture_stream(ws: WebSocket, session_id: str) -> None:
         while True:
             data = await ws.receive_bytes()
             try:
-                # Lazy import — opencv only on the worker-slam image. The
-                # api container also has it via the base image so the
-                # decode path is fine here.
-                import cv2  # noqa: PLC0415
-
                 arr = np.frombuffer(data, dtype=np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is None:

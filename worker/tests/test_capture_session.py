@@ -162,6 +162,30 @@ async def test_capture_session_emits_splat_preview(tmp_data_dir):
         cap_mod._PREVIEW_MIN_INTERVAL_S = _PREVIEW_MIN_INTERVAL_S
 
 
+def test_ws_decode_path_imports_resolve():
+    """Closes a regression where every JPEG frame the phone pushed was
+    silently dropped because the api container's image was missing
+    `opencv-python-headless`. The capture WS handler used to lazy-import
+    cv2 inside the per-frame loop, so a missing dep surfaced as a
+    per-frame `ModuleNotFoundError` log line and zero frames captured —
+    invisible to every existing test because the unit tests bypass the
+    WS handler and push pre-decoded numpy arrays directly.
+
+    Asserting the imports resolve at module load (where `app.main`
+    pulls them in eagerly) means a future Dockerfile change that drops
+    cv2 will fail the api container's startup with a clear
+    `ModuleNotFoundError: No module named 'cv2'` rather than silently
+    eating frames forever."""
+    import app.main  # noqa: F401 — exercising the import is the point
+    import cv2  # noqa: F401
+    import numpy as np  # noqa: F401
+
+    # Sanity: cv2.imdecode is what the WS handler actually calls. If
+    # opencv ever ships a future version where the symbol moves, this
+    # forces a loud failure here rather than a silent regression.
+    assert hasattr(cv2, "imdecode")
+
+
 @pytest.mark.asyncio
 async def test_capture_session_drops_frames_under_backpressure(tmp_data_dir):
     """If the SLAM step rate is slower than the push rate, the
