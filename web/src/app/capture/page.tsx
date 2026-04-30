@@ -64,6 +64,14 @@ export default function CapturePage() {
   const latestSplatPreview = useCaptureStore((s) => s.latestSplatPreview);
   const videoReady = useCaptureStore((s) => s.videoReady);
   const videoSize = useCaptureStore((s) => s.videoSize);
+  const log = useCaptureStore((s) => s.log);
+
+  // The log overlay is collapsed by default — most users never need
+  // it. When open, the user can read or copy the timeline (plus a
+  // header summary of the chip stats) to share when reporting a
+  // stuck capture.
+  const [showLog, setShowLog] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
 
   // "open" or actively retrying — both are flavours of an in-progress
   // session, so treat them as `capturing` for the purpose of which
@@ -322,6 +330,25 @@ export default function CapturePage() {
             ))}
           </select>
         )}
+        {/* Log toggle. Sits next to the dropdowns so it's reachable
+         *  whether the user is mid-capture or just inspecting. The
+         *  badge shows the current entry count so a stuck session
+         *  reports something helpful even before the user opens it. */}
+        <button
+          type="button"
+          onClick={() => setShowLog((v) => !v)}
+          style={{
+            background: "#0a0a0a",
+            color: "#fff",
+            border: "1px solid rgba(255, 255, 255, 0.4)",
+            borderRadius: "var(--r-xs)",
+            padding: "4px 8px",
+            fontSize: "var(--fs-xs)",
+            minHeight: 32,
+          }}
+        >
+          {showLog ? "hide log" : `log (${log.length})`}
+        </button>
       </div>
 
       <div
@@ -392,6 +419,56 @@ export default function CapturePage() {
         </div>
       )}
 
+      {showLog && (
+        <CaptureLogPanel
+          log={log}
+          onClose={() => setShowLog(false)}
+          copyState={copyState}
+          onCopy={async () => {
+            const header = formatLogHeader({
+              videoReady,
+              videoSize,
+              status,
+              reconnectAttempt,
+              framesSent,
+              framesDroppedClient,
+              framesProcessed: stats.frames,
+              framesDroppedServer: stats.dropped,
+              pointsCount,
+              hasSplatPreview: latestSplatPreview != null,
+            });
+            const body = log
+              .map(
+                (e) =>
+                  `[${(e.t / 1000).toFixed(2)}s] ${e.level.padEnd(5)} ${e.msg}`,
+              )
+              .join("\n");
+            const text = `${header}\n\n${body}`;
+            try {
+              if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+              } else {
+                // Fallback for browsers without async clipboard (older
+                // mobile Safari versions). The textarea-select-execCommand
+                // trick still works there.
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+              }
+              setCopyState("ok");
+            } catch {
+              setCopyState("err");
+            }
+            setTimeout(() => setCopyState("idle"), 1500);
+          }}
+        />
+      )}
+
       {/* Layout rules. Inline so the page stays self-contained — no
           new globals.css edits for a feature that lives at one URL. */}
       <style jsx>{`
@@ -436,6 +513,160 @@ export default function CapturePage() {
       `}</style>
     </div>
   );
+}
+
+/** Slide-up overlay that exposes the client-side capture log. The
+ *  dedicated panel exists so a phone user can copy the timeline +
+ *  paste it into a chat when reporting a stuck capture — without it
+ *  the chip alone is too narrow to surface much beyond the running
+ *  counters. */
+function CaptureLogPanel({
+  log,
+  onClose,
+  onCopy,
+  copyState,
+}: {
+  log: { t: number; level: "info" | "warn" | "error"; msg: string }[];
+  onClose: () => void;
+  onCopy: () => void;
+  copyState: "idle" | "ok" | "err";
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 10,
+        display: "flex",
+        flexDirection: "column",
+        background: "rgba(10, 10, 10, 0.94)",
+        color: "#fff",
+        padding: 16,
+      }}
+      role="dialog"
+      aria-label="capture log"
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ fontSize: "var(--fs-md)", fontWeight: 600 }}>
+          capture log
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={onCopy}
+            style={{
+              padding: "8px 14px",
+              minHeight: 40,
+              background:
+                copyState === "ok"
+                  ? "#3a7"
+                  : copyState === "err"
+                    ? "#a33"
+                    : "#fff",
+              color: copyState === "idle" ? "#000" : "#fff",
+              border: "1px solid #fff",
+              borderRadius: 4,
+              fontWeight: 600,
+              fontSize: "var(--fs-sm)",
+            }}
+          >
+            {copyState === "ok"
+              ? "copied"
+              : copyState === "err"
+                ? "copy failed"
+                : "copy"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "8px 14px",
+              minHeight: 40,
+              background: "transparent",
+              color: "#fff",
+              border: "1px solid rgba(255, 255, 255, 0.5)",
+              borderRadius: 4,
+              fontSize: "var(--fs-sm)",
+            }}
+          >
+            close
+          </button>
+        </div>
+      </div>
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+          fontSize: "var(--fs-xs)",
+          lineHeight: 1.4,
+          background: "rgba(0, 0, 0, 0.5)",
+          padding: 8,
+          borderRadius: 4,
+          // Keep the text readable on narrow screens — wrap rather
+          // than horizontal-scroll, which is awkward on mobile.
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {log.length === 0 ? (
+          <div style={{ opacity: 0.6 }}>
+            (no log entries yet — start a capture to populate)
+          </div>
+        ) : (
+          log.map((e, i) => (
+            <div
+              key={i}
+              style={{
+                color:
+                  e.level === "error"
+                    ? "#f88"
+                    : e.level === "warn"
+                      ? "#fc8"
+                      : "#cdf",
+              }}
+            >
+              [{(e.t / 1000).toFixed(2)}s] {e.level.padEnd(5)} {e.msg}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Build the human-readable header that gets prepended to the
+ *  copied log so the recipient sees the chip stats in context. */
+function formatLogHeader(state: {
+  videoReady: boolean;
+  videoSize: [number, number] | null;
+  status: string;
+  reconnectAttempt: number;
+  framesSent: number;
+  framesDroppedClient: number;
+  framesProcessed: number;
+  framesDroppedServer: number;
+  pointsCount: number;
+  hasSplatPreview: boolean;
+}): string {
+  const lines = [
+    `# vid3d capture log @ ${new Date().toISOString()}`,
+    `ua: ${typeof navigator !== "undefined" ? navigator.userAgent : "?"}`,
+    `video: ${state.videoReady && state.videoSize ? `${state.videoSize[0]}x${state.videoSize[1]}` : state.videoReady ? "ready" : "not ready"}`,
+    `ws: ${state.status}${state.reconnectAttempt > 0 ? ` (retry ${state.reconnectAttempt})` : ""}`,
+    `frames sent=${state.framesSent} dropped(client)=${state.framesDroppedClient}`,
+    `frames processed=${state.framesProcessed} dropped(server)=${state.framesDroppedServer}`,
+    `points=${state.pointsCount} splat-preview=${state.hasSplatPreview ? "yes" : "no"}`,
+  ];
+  return lines.join("\n");
 }
 
 /** Streams the live sparse cloud as a `<points>` geometry. Reads the
