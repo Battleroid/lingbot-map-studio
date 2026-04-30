@@ -4,24 +4,40 @@
 # request — only `localhost` is exempt, and you can't loopback from a
 # phone.
 #
-# Wired up with mkcert: install mkcert + its root CA on the host once,
-# trust the same CA on the phone (Settings → Security → Install
-# certificate → CA), and Caddy serves the mkcert-issued cert here.
-# Both /api/* (FastAPI + WebSocket) and the rest (Next.js) are proxied
-# through the same hostname so the browser sees one origin and the
-# capture WS stays same-origin (no cors headache).
+# Wired up with mkcert: `make up-https` runs scripts/mkcert-bootstrap.sh,
+# which installs mkcert on the host, trusts a local root CA, generates
+# a cert pair into ./caddy/certs/, and copies the root CA next to it so
+# this Caddyfile can serve it back over plain HTTP for the phone to
+# download (the phone has to trust the CA *before* it'll accept the
+# studio's HTTPS cert — chicken-and-egg).
 #
-# Override the hostname via `STUDIO_HOSTNAME=studio.local make up-https`;
-# default `studio.local` matches the README walkthrough.
+# Both blocks bind to ports rather than hostnames so the LAN IP and the
+# friendly `studio.local` name both work without any DNS setup; the
+# cert SANs cover both. If you do set up DNS / mDNS, that just works
+# too.
 
-{$STUDIO_HOSTNAME:studio.local} {
+# Plain HTTP block — its only jobs are:
+#   1. serve /mkcert-rootCA.pem so the phone can download the root CA
+#      before it trusts anything HTTPS.
+#   2. redirect every other request to HTTPS.
+:80 {
+	@rootca path /mkcert-rootCA.pem
+	handle @rootca {
+		root * /certs
+		rewrite * /rootCA.pem
+		file_server
+	}
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}
+
+# HTTPS block — proxies to the studio. /api/* hits FastAPI (HTTP +
+# WebSocket; Caddy upgrades the WS automatically when the client sends
+# the Upgrade header). Everything else hits the Next.js web container.
+# Same hostname for both so the capture WebSocket stays same-origin.
+:443 {
 	tls /certs/cert.pem /certs/key.pem
-
-	# FastAPI mounts everything under /api (HTTP + the capture / job
-	# WebSockets). Caddy upgrades WS automatically when the client sends
-	# the Upgrade header — no extra config needed.
 	reverse_proxy /api/* api:8000
-
-	# Next.js serves the rest (pages, _next/* assets, public/).
 	reverse_proxy * web:3000
 }

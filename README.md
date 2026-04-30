@@ -48,76 +48,61 @@ docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull
 docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml up
 ```
 
-## Scanning from a phone — HTTPS setup with mkcert
+## Scanning from a phone — `make up-https`
 
 The `/capture` page uses `navigator.mediaDevices.getUserMedia` to pull
 frames off the phone's camera and stream them to the SLAM tracker live.
 Mobile browsers refuse camera access over plain `http://` (only
-`localhost` is exempt, which you can't loopback into from a phone), so
-the studio needs to be reachable over `https://` for the capture flow
-to work. The default `make up` keeps everything on plain HTTP — that's
-fine for the upload flow on the same machine. Use `make up-https`
-when you actually want to scan from a phone.
-
-The recipe is **mkcert** (a tiny local CA) + **Caddy** as a reverse
-proxy. Caddy is already wired into `docker-compose.yml` under
-`profiles: [https]`; the only manual step is generating + trusting a
-cert pair.
-
-**One-time on the host (laptop / desktop running the studio):**
+`localhost` is exempt, and you can't loopback into a phone), so the
+studio needs to be reachable over `https://` for the capture flow.
 
 ```bash
-# 1. install mkcert (Debian/Ubuntu)
-sudo apt-get install -y libnss3-tools
-curl -L "https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64" \
-  -o /usr/local/bin/mkcert
-sudo chmod +x /usr/local/bin/mkcert
-mkcert -install
-
-# 2. find the host's LAN IP (e.g. 192.168.1.42)
-ip -4 addr show | awk '/inet 192/ {print $2}'
-
-# 3. generate a cert pair valid for both a friendly name and the LAN IP
-mkdir -p caddy/certs
-mkcert -cert-file caddy/certs/cert.pem \
-       -key-file  caddy/certs/key.pem \
-       studio.local 192.168.1.42
-
-# 4. start the stack with the https profile
-STUDIO_HOSTNAME=studio.local make up-https
+make up-https
 ```
 
-**One-time on the phone (Android — iOS notes below):**
+That's it on the host side. The target auto-installs **mkcert** (the
+local-CA tool) on apt / dnf / brew systems, trusts a per-host root CA,
+generates a cert pair covering `localhost` + the auto-detected LAN IP
++ `studio.local`, and brings up **Caddy** in front of the existing
+stack to terminate TLS and reverse-proxy `/api/*` (HTTP + the capture
+WebSocket) plus the Next.js frontend over a single hostname. Default
+`make up` is unchanged.
 
-1. Copy `$(mkcert -CAROOT)/rootCA.pem` from the host to the phone (USB,
-   AirDrop equivalent, or `python3 -m http.server` over LAN).
-2. Settings → Security → Encryption & credentials → Install a
-   certificate → **CA certificate** → pick the `rootCA.pem` file.
-   Confirm "Install anyway".
-3. Add a hosts entry for `studio.local` → host LAN IP. The simplest
-   way is to skip the friendly name and just open the URL by IP
-   instead (`https://192.168.1.42/capture`); the cert covers both
-   names so either works.
+When the stack comes up it prints two URLs you visit from the phone,
+in order:
 
-Open `https://studio.local/capture` (or the IP form) from the phone's
-browser. The browser should accept the cert without warnings; the page
-will prompt for camera access, you tap allow, and the live preview
-kicks off.
+1. **`http://<host-lan-ip>/mkcert-rootCA.pem`** — Caddy serves the
+   freshly-generated root CA over plain HTTP on port 80 (the only
+   thing on the HTTP block; everything else 301s to HTTPS). Tap the
+   link, the phone downloads the `.pem`, then install it:
+   - **Android**: Settings → Security → Encryption & credentials →
+     Install a certificate → **CA certificate** → pick the file.
+     Confirm "Install anyway".
+   - **iOS**: open the file from the Files app → Settings prompts
+     "Profile downloaded" → General → VPN & Device Management →
+     install. Then General → About → **Certificate Trust Settings**
+     → toggle the mkcert root to fully trust it (Apple gates
+     user-installed CAs behind this extra step on purpose).
 
-**iOS:** the flow is the same but the cert install lives at General →
-VPN & Device Management, and you also have to flip a separate switch
-under General → About → Certificate Trust Settings to fully trust the
-mkcert root. Apple does this on purpose to make user-installed CAs
-slightly less dangerous.
+2. **`https://<host-lan-ip>/capture`** — the capture page itself.
+   With the CA trusted from step 1 the browser accepts the cert
+   without warnings, the page prompts for camera access, you tap
+   allow, the live preview kicks off.
 
-**Why mkcert and not Let's Encrypt / Caddy auto-HTTPS?** Both
-alternatives need a publicly-resolvable hostname and inbound port 80.
-The studio is intended to run on a LAN behind a home router, so
-self-signed via a locally-trusted CA is the path with the fewest
-moving parts. If you do expose the studio to the public internet
-(via Cloudflare Tunnel, Tailscale Funnel, or a real VPS) you can
-delete the `tls /certs/...` line from `caddy/Caddyfile` and Caddy
-will provision a Let's Encrypt cert automatically.
+If you want to use the friendly `studio.local` name instead of the
+LAN IP, add a DNS entry on your router or the phone's hosts
+equivalent — the cert covers both. The IP form needs no DNS setup.
+
+To regenerate the cert pair (e.g. moved hosts, new LAN IP), run
+`make https-certs` and re-run `make up-https`.
+
+**Why mkcert + Caddy and not Let's Encrypt?** Both alternatives need
+a publicly-resolvable hostname and inbound port 80. The studio is
+designed to run on a LAN behind a home router, so a locally-trusted
+CA is the path with the fewest moving parts. If you do expose the
+studio to the public internet (Cloudflare Tunnel, Tailscale Funnel,
+or a real VPS) you can delete the `tls /certs/...` line from
+`caddy/Caddyfile` and Caddy will provision Let's Encrypt automatically.
 
 ## What to expect on the first job
 

@@ -179,15 +179,12 @@ services:
         condition: service_healthy
 
   # Optional HTTPS reverse proxy. Off by default — `make up` keeps both
-  # services on plain http://localhost like before. Bring it up alongside
-  # the rest of the stack with `make up-https` (or `docker compose
-  # --profile https up`) once you've dropped a mkcert-issued cert pair
-  # into ./caddy/certs/{cert,key}.pem. The README walkthrough has the
-  # full mkcert + Android trust recipe; the short version is:
-  #   mkcert -install
-  #   mkcert -cert-file caddy/certs/cert.pem -key-file caddy/certs/key.pem \
-  #          studio.local 192.168.1.42
-  #   STUDIO_HOSTNAME=studio.local make up-https
+  # services on plain http://localhost like before. Bring it up with
+  # `make up-https`, which is one-shot: it auto-installs mkcert if
+  # missing, trusts the local root CA, generates a cert pair into
+  # ./caddy/certs/, and starts the stack under the https profile. The
+  # README walkthrough has the phone-side trust steps.
+  #
   # Required for `getUserMedia` (and therefore /capture) to work on a
   # phone — mobile browsers refuse the camera prompt over plain http.
   caddy:
@@ -201,8 +198,6 @@ services:
       - ${STUDIO_TLS_DIR:-./caddy/certs}:/certs:ro
       - caddy-data:/data
       - caddy-config:/config
-    environment:
-      STUDIO_HOSTNAME: ${STUDIO_HOSTNAME:-studio.local}
     depends_on:
       api:
         condition: service_healthy

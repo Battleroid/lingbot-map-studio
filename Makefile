@@ -10,7 +10,9 @@
 #   make up           — pull GHCR images + start (default; foreground)
 #   make up-d         — same, but daemonized
 #   make up-build     — build images from source + start (slow first run)
-#   make up-https     — start with HTTPS via Caddy + mkcert (phone /capture)
+#   make up-https     — start with HTTPS via Caddy + mkcert (one-shot,
+#                       phone /capture). Auto-bootstraps mkcert + certs.
+#   make https-certs  — regenerate the mkcert cert pair on demand
 #   make pull         — refresh GHCR images
 #   make down         — stop + remove containers (keeps named volumes)
 #   make logs         — tail logs from every service
@@ -28,8 +30,8 @@
 COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PREBUILT := -f docker-compose.yml -f docker-compose.prebuilt.yml
 
-.PHONY: help doctor up up-d up-build up-https pull down logs ps restart clean \
-        shell-api shell-lingbot shell-slam shell-gs
+.PHONY: help doctor up up-d up-build up-https up-https-summary https-certs pull down \
+        logs ps restart clean shell-api shell-lingbot shell-slam shell-gs
 
 help:
 	@awk 'BEGIN{FS=":.*##"; printf "vid3d studio targets:\n"} \
@@ -80,35 +82,72 @@ up-build: .env ## build images from source + start (slow first run)
 # (and thus the /capture page) to work from a phone — mobile browsers
 # only allow camera access on HTTPS or localhost.
 #
-# Prereqs (one-time):
-#   1. install mkcert on the host: `mkcert -install`
-#   2. generate the cert pair (replace the IP with your studio host's
-#      LAN address — find it via `ip addr` / `ipconfig`):
-#        mkdir -p caddy/certs
-#        mkcert -cert-file caddy/certs/cert.pem \
-#               -key-file  caddy/certs/key.pem \
-#               studio.local 192.168.1.42
-#   3. trust the same root CA on the phone (Settings → Security →
-#      Encryption & credentials → Install certificate → CA, then pick
-#      the file at `$(mkcert -CAROOT)/rootCA.pem`).
-#   4. add `studio.local` to the phone's `/etc/hosts` equivalent or set
-#      a matching DNS entry on your router. (Or just use the LAN IP and
-#      pass it via `STUDIO_HOSTNAME=192.168.1.42`.)
+# Single-command path: `make up-https` does everything. It:
+#   1. (re-)bootstraps mkcert + cert pair + root CA via
+#      scripts/mkcert-bootstrap.sh (auto-installs mkcert on
+#      apt/dnf/brew hosts; trusts the local root CA; emits cert,
+#      key, and rootCA.pem into ./caddy/certs/).
+#   2. rebuilds the web image with an empty NEXT_PUBLIC_API_BASE so
+#      the bundle resolves the api origin from window.location at
+#      runtime (otherwise the baked-in localhost url would
+#      mixed-content-block from the HTTPS origin).
+#   3. brings up the stack with the https profile (caddy + web + api
+#      + workers).
+#   4. prints the URLs to open from the phone (LAN IP + friendly
+#      hostname) plus the rootCA download URL the phone needs to
+#      visit *first* to trust the studio's cert.
 #
-# We rebuild `web` here with an empty NEXT_PUBLIC_API_BASE so the
-# runtime fallback to `window.location.origin` kicks in (the bundle
-# would otherwise have `http://localhost:8000` baked in and
-# mixed-content-block from the HTTPS origin).
-up-https: .env ## start with HTTPS via Caddy + mkcert (for phone /capture)
-	@if [ ! -f caddy/certs/cert.pem ] || [ ! -f caddy/certs/key.pem ]; then \
-	  echo "[!] missing caddy/certs/{cert,key}.pem — see the recipe in"; \
-	  echo "    the Makefile up-https target or README §scanning-from-phone."; \
-	  exit 1; \
-	fi
+# The cert pair is checked in via Make's prerequisite system — once
+# generated it's reused across runs; delete caddy/certs/cert.pem to
+# force a regenerate (e.g. after moving to a new LAN with a different
+# IP). The bootstrap re-runs automatically when scripts/mkcert-bootstrap.sh
+# is edited.
+up-https: .env caddy/certs/cert.pem ## start with HTTPS via Caddy + mkcert (one-shot, no prep)
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile build build base
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https build web caddy
+	@$(MAKE) -s up-https-summary
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https up
-	@echo "[+] open https://$${STUDIO_HOSTNAME:-studio.local}/capture from the phone"
+
+# Cert bootstrap. Make picks this up as a prereq for up-https + only
+# runs it when caddy/certs/cert.pem is missing OR older than the
+# bootstrap script (so editing the script forces a regenerate).
+caddy/certs/cert.pem: scripts/mkcert-bootstrap.sh
+	@bash scripts/mkcert-bootstrap.sh
+
+# Public-facing helper: re-run the cert bootstrap explicitly (e.g. after
+# moving to a different LAN and wanting the new IP in the cert).
+https-certs: ## (re)generate https certs via mkcert
+	@rm -f caddy/certs/cert.pem caddy/certs/key.pem
+	@$(MAKE) -s caddy/certs/cert.pem
+
+# Internal: print the post-build summary so the user knows where to
+# point their phone before `up` takes over the foreground.
+up-https-summary:
+	@echo
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo " HTTPS studio about to start. From the phone:"
+	@echo
+	@if [ -f caddy/certs/.env.bootstrap ]; then \
+	  . caddy/certs/.env.bootstrap; \
+	  if [ -n "$$STUDIO_LAN_IP" ]; then \
+	    echo "  1. trust the local CA — visit"; \
+	    echo "       http://$$STUDIO_LAN_IP/mkcert-rootCA.pem"; \
+	    echo "     and install the file (Android: Settings → Security →"; \
+	    echo "     Install certificate → CA. iOS: General → VPN & Device"; \
+	    echo "     Mgmt + Certificate Trust Settings)."; \
+	    echo; \
+	    echo "  2. open https://$$STUDIO_LAN_IP/capture and tap allow"; \
+	    echo "     when the camera prompt appears."; \
+	  else \
+	    echo "  1. http://$$STUDIO_HOSTNAME/mkcert-rootCA.pem  (trust the CA)"; \
+	    echo "  2. https://$$STUDIO_HOSTNAME/capture            (camera)"; \
+	  fi; \
+	else \
+	  echo "  visit http://<host-lan-ip>/mkcert-rootCA.pem to trust the CA,"; \
+	  echo "  then https://<host-lan-ip>/capture"; \
+	fi
+	@echo "════════════════════════════════════════════════════════════════"
+	@echo
 
 down: ## stop + remove containers (keeps named volumes)
 	$(COMPOSE) $(PREBUILT) down
