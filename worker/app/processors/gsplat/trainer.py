@@ -278,7 +278,9 @@ class GsplatProcessor(Processor):
     id: ClassVar[str] = "gsplat"  # type: ignore[assignment]
     kind: ClassVar[str] = "gsplat"  # type: ignore[assignment]
     worker_class: ClassVar[str] = "gs"  # type: ignore[assignment]
-    supported_artifacts = frozenset({"splat_ply", "splat_sogs", "json", "glb"})
+    supported_artifacts = frozenset(
+        {"splat_ply", "splat_compressed", "json", "glb"}
+    )
 
     display_name: ClassVar[str] = "Gaussian Splat"
 
@@ -541,19 +543,21 @@ class GsplatProcessor(Processor):
                 )
             )
 
-        sogs = ctx.artifacts_dir / "splat.sogs"
+        # Write the antimatter15/OpenSplat compressed `.splat` next to
+        # the PLY. ~8× smaller than splat.ply for the same gaussian set
+        # and loadable directly by Spark / antimatter15's viewer /
+        # OpenSplat's resume path. Replaces the previous SOGS placeholder.
+        compressed = ctx.artifacts_dir / "splat.splat"
         await asyncio.to_thread(
-            splat_export.write_sogs_placeholder,
-            sogs,
-            splat_ply_path=splat,
-            iterations=cfg.iterations,
-            n_gaussians=state.n,
+            splat_export.write_compressed_splat,
+            compressed,
+            **state.as_kwargs(),
         )
         artifacts.append(
             Artifact(
-                name=sogs.name,
-                kind="splat_sogs",
-                size_bytes=sogs.stat().st_size,
+                name=compressed.name,
+                kind="splat_compressed",
+                size_bytes=compressed.stat().st_size,
             )
         )
 

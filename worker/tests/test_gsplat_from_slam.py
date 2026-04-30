@@ -6,7 +6,7 @@ Chains:
   2. Run `GsplatProcessor.run` against a `GsplatConfig(source_job_id=…)`.
   3. Assert the training loop produced a non-empty `splat.ply`, a
      `training_log.jsonl` with one row per iteration, a `cameras.json`,
-     and a `splat.sogs` placeholder.
+     and an antimatter15/OpenSplat compressed `splat.splat`.
 
 The simulated trainer in `app.processors.gsplat.trainer` keeps this
 CPU-only. Run: `pytest worker/tests/test_gsplat_from_slam.py -q`.
@@ -138,9 +138,18 @@ async def test_gsplat_trains_from_slam_source(
     result = await GsplatProcessor().run(ctx)
 
     names = {a.name for a in result.artifacts}
-    assert {"splat.ply", "cameras.json", "splat.sogs"}.issubset(names)
+    assert {"splat.ply", "cameras.json", "splat.splat"}.issubset(names)
     assert result.extras["source_job_id"] == src_id
     assert result.extras["final_gaussians"] > 0
+
+    # splat.splat is N × 32 bytes — the antimatter15/OpenSplat
+    # compressed format. Size has to be a multiple of 32 and match
+    # the gaussian count the manifest reports.
+    compressed = artifacts_dir / "splat.splat"
+    assert compressed.exists()
+    n_compressed = compressed.stat().st_size // 32
+    assert compressed.stat().st_size == n_compressed * 32
+    assert n_compressed == result.extras["final_gaussians"]
 
     # splat.ply has a valid 3DGS header with every expected property.
     head = (artifacts_dir / "splat.ply").read_bytes().split(b"end_header\n", 1)[0].decode()
