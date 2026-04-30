@@ -67,7 +67,7 @@ RUN pip install --no-cache-dir \
         "imageio==2.34.2" \
         "lpips==0.1.4" \
         "wandb==0.17.7" \
-        "evo==1.28.1" \
+        "evo==1.28.0" \
         "matplotlib==3.9.2"
 
 # Build deps for MonoGS source build (its 3DGS rasterizer ships its own
