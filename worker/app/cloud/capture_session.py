@@ -168,6 +168,22 @@ class CaptureSession:
                 update = await asyncio.to_thread(slam.step, pkt.idx, pkt.img_bgr)
                 self._frame_count += 1
 
+                # Surface the first decoded frame loudly so the client
+                # can flip from "starting…" to "capturing" immediately.
+                # Without this the user has to wait for either the
+                # first SLAM keyframe (pose/points emit) or the 10-
+                # frame stats throttle to fire before any UI feedback
+                # appears, which on a slow phone-to-laptop network
+                # looks like the page is broken.
+                if self._frame_count == 1:
+                    log.info(
+                        "capture_session %s: first frame %dx%d",
+                        self.id,
+                        pkt.img_bgr.shape[1],
+                        pkt.img_bgr.shape[0],
+                    )
+                    await self._emit_stats()
+
                 if update.pose_matrix is not None:
                     self._poses.append(update.pose_matrix)
                     await self._emit_pose(update.pose_matrix, pkt.idx)
@@ -176,9 +192,11 @@ class CaptureSession:
                     self._points_buffer.append(update.new_points)
                     await self._emit_points(capped, pkt.idx)
 
-                # Throttle stats events to once per second so the chip
-                # in the UI doesn't redraw on every frame.
-                if self._frame_count % 10 == 0:
+                # First five frames get a stats event apiece so the
+                # user sees activity right away; after that throttle
+                # to one per ten frames (≈1 s at 10 Hz capture) so we
+                # don't redraw the chip on every step.
+                if self._frame_count <= 5 or self._frame_count % 10 == 0:
                     await self._emit_stats()
         except Exception as exc:  # noqa: BLE001
             log.warning("capture_session %s loop raised: %s", self.id, exc)

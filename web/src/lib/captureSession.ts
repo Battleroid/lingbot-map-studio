@@ -52,6 +52,19 @@ interface CaptureState {
   stats: CaptureStats;
   error: string | null;
 
+  // Client-side count of frame-send *attempts*. Incremented on every
+  // sendFrame call, regardless of whether the WS actually flushed the
+  // bytes. Useful as a "your phone is doing something" signal that's
+  // independent of the server-emitted `stats.frames` (which only
+  // updates after the server processes a frame). When framesSent
+  // climbs but stats.frames stays at zero we know the WS-to-server
+  // pipe is the broken bit, not the camera capture.
+  framesSent: number;
+  // Same idea for client-side drops: we increment when sendFrame
+  // bails because the WS buffer is too full, so the user can see if
+  // their connection is the bottleneck.
+  framesDroppedClient: number;
+
   // Reconnect bookkeeping. `reconnectAttempt` is 0 while connected /
   // idle and >0 while a retry is scheduled or in flight (used in the
   // UI to show "reconnecting…" copy + a counter). `reconnectTimer`
@@ -94,6 +107,8 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   voxels: new Map(),
   stats: { frames: 0, queued: 0, dropped: 0 },
   error: null,
+  framesSent: 0,
+  framesDroppedClient: 0,
   reconnectAttempt: 0,
   reconnectTimer: null,
   userInitiatedClose: false,
@@ -147,6 +162,8 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       voxels: new Map(),
       stats: { frames: 0, queued: 0, dropped: 0 },
       error: null,
+      framesSent: 0,
+      framesDroppedClient: 0,
       reconnectAttempt: 0,
       reconnectTimer: null,
       userInitiatedClose: false,
@@ -175,10 +192,14 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     // Drop if we're already 256 KB behind — client-side
     // backpressure so the server's SLAM step rate is the bottleneck,
     // not a queue of stale frames.
-    if (ws.bufferedAmount > 256 * 1024) return;
+    if (ws.bufferedAmount > 256 * 1024) {
+      set((s) => ({ framesDroppedClient: s.framesDroppedClient + 1 }));
+      return;
+    }
     void blob.arrayBuffer().then((buf) => {
       try {
         ws.send(buf);
+        set((s) => ({ framesSent: s.framesSent + 1 }));
       } catch {
         /* drop on disconnect */
       }

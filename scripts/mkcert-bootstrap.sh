@@ -87,6 +87,41 @@ ensure_mkcert() {
     esac
 }
 
+# ── 1b. ensure qrencode is present (best-effort, no-op on failure) ─
+# Used by the Makefile to print a scannable QR code for the rootCA URL
+# so the user can point their phone camera at the terminal instead of
+# typing the LAN IP. Optional — if the install fails (e.g. the host is
+# offline or on an exotic distro) the Makefile falls back to printing
+# the URL as plain text.
+ensure_qrencode() {
+    if command -v qrencode >/dev/null 2>&1; then
+        return 0
+    fi
+    plus "qrencode not found — attempting install (best-effort)"
+    local uname_s
+    uname_s=$(uname -s)
+    case "$uname_s" in
+        Linux)
+            local SUDO=""
+            [[ $EUID -ne 0 ]] && SUDO="sudo"
+            if command -v apt-get >/dev/null 2>&1; then
+                $SUDO apt-get install -y qrencode >/dev/null 2>&1 || \
+                    yellow "[!] couldn't install qrencode; QR will be skipped"
+            elif command -v dnf >/dev/null 2>&1; then
+                $SUDO dnf install -y qrencode >/dev/null 2>&1 || \
+                    yellow "[!] couldn't install qrencode; QR will be skipped"
+            else
+                yellow "[!] no apt/dnf — install qrencode yourself for the QR"
+            fi
+            ;;
+        Darwin)
+            if command -v brew >/dev/null 2>&1; then
+                brew install qrencode >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+}
+
 install_mkcert_from_github() {
     local SUDO="${1:-}"
     local mkarch
@@ -168,6 +203,7 @@ copy_root_ca() {
 
 # ── main ───────────────────────────────────────────────────────────
 ensure_mkcert
+ensure_qrencode
 ensure_root_ca
 
 LAN_IP=$(detect_lan_ip)

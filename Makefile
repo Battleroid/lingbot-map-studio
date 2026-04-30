@@ -122,6 +122,12 @@ https-certs: ## (re)generate https certs via mkcert
 
 # Internal: print the post-build summary so the user knows where to
 # point their phone before `up` takes over the foreground.
+#
+# When `qrencode` is available, render scannable QR codes for both the
+# CA-trust URL and the /capture URL so the phone camera can pick them
+# up without anyone typing a LAN IP. qrencode is best-effort installed
+# by scripts/mkcert-bootstrap.sh; if it's missing, we fall back to
+# plain text.
 up-https-summary:
 	@echo
 	@echo "════════════════════════════════════════════════════════════════"
@@ -130,18 +136,29 @@ up-https-summary:
 	@if [ -f caddy/certs/.env.bootstrap ]; then \
 	  . caddy/certs/.env.bootstrap; \
 	  if [ -n "$$STUDIO_LAN_IP" ]; then \
-	    echo "  1. trust the local CA — on Android, tap"; \
-	    echo "       http://$$STUDIO_LAN_IP/mkcert-rootCA.crt"; \
-	    echo "     The phone should prompt to install (Settings may ask"; \
-	    echo "     for the device PIN). On iOS: same URL, then General →"; \
-	    echo "     VPN & Device Mgmt + Certificate Trust Settings."; \
-	    echo; \
-	    echo "  2. open https://$$STUDIO_LAN_IP/capture and tap allow"; \
-	    echo "     when the camera prompt appears."; \
+	    CA_URL="http://$$STUDIO_LAN_IP/mkcert-rootCA.crt"; \
+	    CAP_URL="https://$$STUDIO_LAN_IP/capture"; \
 	  else \
-	    echo "  1. http://$$STUDIO_HOSTNAME/mkcert-rootCA.crt  (trust the CA)"; \
-	    echo "  2. https://$$STUDIO_HOSTNAME/capture            (camera)"; \
+	    CA_URL="http://$$STUDIO_HOSTNAME/mkcert-rootCA.crt"; \
+	    CAP_URL="https://$$STUDIO_HOSTNAME/capture"; \
 	  fi; \
+	  echo "  1. trust the local CA — scan this QR or visit"; \
+	  echo "       $$CA_URL"; \
+	  if command -v qrencode >/dev/null 2>&1; then \
+	    qrencode -t ANSI256 -m 1 "$$CA_URL"; \
+	  else \
+	    echo "       (install qrencode for a scannable QR)"; \
+	  fi; \
+	  echo "     On Android the file prompts to install on tap;"; \
+	  echo "     on iOS use General → VPN & Device Mgmt +"; \
+	  echo "     Certificate Trust Settings."; \
+	  echo; \
+	  echo "  2. open the capture page — scan or visit"; \
+	  echo "       $$CAP_URL"; \
+	  if command -v qrencode >/dev/null 2>&1; then \
+	    qrencode -t ANSI256 -m 1 "$$CAP_URL"; \
+	  fi; \
+	  echo "     and tap allow when the camera prompt appears."; \
 	else \
 	  echo "  visit http://<host-lan-ip>/mkcert-rootCA.crt to trust the CA,"; \
 	  echo "  then https://<host-lan-ip>/capture"; \

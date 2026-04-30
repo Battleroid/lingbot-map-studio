@@ -1111,6 +1111,8 @@ async def capture_stream(ws: WebSocket, session_id: str) -> None:
 
     out_task = asyncio.create_task(pump_outgoing())
     frame_idx = 0
+    decode_failures = 0
+    log.info("capture %s: WS connected, awaiting frames", session_id)
     try:
         while True:
             data = await ws.receive_bytes()
@@ -1123,13 +1125,44 @@ async def capture_stream(ws: WebSocket, session_id: str) -> None:
                 arr = np.frombuffer(data, dtype=np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is None:
+                    # Decode failures used to be silent (`continue` with
+                    # no logging) which is what made phone-side
+                    # debugging painful — the client believed frames
+                    # were flowing but the server dropped them all
+                    # without a trace. Log on first failure + every
+                    # 10th after so a misencoded stream is loud,
+                    # without spamming if the client is firehosing junk.
+                    decode_failures += 1
+                    if decode_failures == 1 or decode_failures % 10 == 0:
+                        log.warning(
+                            "capture %s: cv2.imdecode returned None "
+                            "(failures=%d, payload_bytes=%d)",
+                            session_id,
+                            decode_failures,
+                            len(data),
+                        )
                     continue
+                if frame_idx == 0:
+                    log.info(
+                        "capture %s: first WS frame decoded ok "
+                        "(%d bytes → %dx%d)",
+                        session_id,
+                        len(data),
+                        img.shape[1],
+                        img.shape[0],
+                    )
                 await session.push_frame(frame_idx, img)
                 frame_idx += 1
             except Exception as exc:  # noqa: BLE001
                 log.warning("capture %s: frame decode failed: %s", session_id, exc)
                 continue
     except WebSocketDisconnect:
+        log.info(
+            "capture %s: WS disconnected (received=%d, decode_failures=%d)",
+            session_id,
+            frame_idx,
+            decode_failures,
+        )
         return
     finally:
         out_task.cancel()
