@@ -79,7 +79,15 @@ async def _exercise_slam_pipeline(
         set_frames_total=set_frames_total,
     )
 
+    # Production resolver now raises rather than falling back to
+    # simulated, so for CPU CI we override `_make_session` to
+    # return the simulated tracker directly. The test still
+    # exercises the full processor orchestration in `run()`; only
+    # the specific session class differs.
+    from app.processors.slam.mast3r_slam import _Mast3rSlamSession
+
     processor = Mast3rSlamProcessor()
+    processor._make_session = lambda ctx: _Mast3rSlamSession()  # type: ignore[method-assign]
 
     # Patch `_ingest` so we don't run ffmpeg on a synthetic PNG sequence;
     # the frames are already on disk, just report the count.
@@ -181,7 +189,15 @@ async def test_slam_respects_cancellation(tmp_data_dir, synthetic_frames):
         set_frames_total=lambda _n: asyncio.sleep(0),
     )
 
+    # Production resolver now raises rather than falling back to
+    # simulated, so for CPU CI we override `_make_session` to
+    # return the simulated tracker directly. The test still
+    # exercises the full processor orchestration in `run()`; only
+    # the specific session class differs.
+    from app.processors.slam.mast3r_slam import _Mast3rSlamSession
+
     processor = Mast3rSlamProcessor()
+    processor._make_session = lambda ctx: _Mast3rSlamSession()  # type: ignore[method-assign]
 
     async def _fake_ingest(_ctx):
         return len(sorted(frames_dir.glob("*.png")))

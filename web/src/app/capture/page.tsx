@@ -12,7 +12,7 @@ import {
 } from "react";
 import * as THREE from "three";
 
-import { CameraOverlayMask } from "@/components/capture/CameraOverlayMask";
+import { CameraOverlayPoints } from "@/components/capture/CameraOverlayPoints";
 import { CameraStream } from "@/components/capture/CameraStream";
 import {
   CoverageVoxels,
@@ -259,16 +259,19 @@ function CapturePageInner() {
           fps={10}
           deviceId={deviceId}
         />
-        {/* Scaniverse-style coverage mask. Screen-space candy-stripe
-         *  over screen regions whose view direction the SLAM tracker
-         *  hasn't observed yet; the camera feed shows through where
-         *  the user has already pointed. Driven entirely by the az/el
-         *  coverage map maintained in the captureSession store —
-         *  no depth or world-space projection required. As you pan
-         *  into striped regions the stripes peel back; before any
-         *  pose has landed the whole screen is striped (matches
-         *  Scaniverse's "Move around the subject" intro state). */}
-        {capturing && <CameraOverlayMask />}
+        {/* Real-space points overlay. The candy-stripe mask we tried
+         *  before kept "filling in" within seconds because the
+         *  simulated SLAM tracker scatters feature corners widely
+         *  across each frame and a single point claimed a whole 10°
+         *  cone in the 36×18 az/el bucket grid — so the stripes
+         *  disappeared and were never seen again. This replaces it
+         *  with the actual SLAM point cloud rendered as 3D dots
+         *  through the live camera basis: dots stay stuck to the
+         *  world locations the tracker has observed, areas with no
+         *  dots haven't been scanned. Same "show me what's been
+         *  captured vs not" cue, no projection or coverage shader
+         *  needed. */}
+        {capturing && <CameraOverlayPoints />}
       </div>
 
       {/* Coverage canvas. PiP on portrait (top-left, 35% × 35%);

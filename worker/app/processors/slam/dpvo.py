@@ -31,27 +31,37 @@ class _DpvoSession(SimulatedSlamSession):
     keyframe_every: ClassVar[int] = 3
 
 
+class DpvoUnavailableError(RuntimeError):
+    """Raised when the real DPVO CUDA tracker can't be loaded. Same
+    strict-no-fallback policy as the other backends."""
+
+
 def select_session_cls() -> type[SlamSession]:
-    """Auto-select the CUDA session when its dependencies are all
-    importable; fall back to the simulated session otherwise."""
+    """Resolve the real DPVO CUDA session. Raises
+    `DpvoUnavailableError` with install instructions when any
+    prerequisite is missing."""
     try:
         import torch  # noqa: PLC0415
-    except ImportError:
-        return _DpvoSession
+    except ImportError as exc:
+        raise DpvoUnavailableError(
+            "dpvo: torch is not installed in this worker. The real "
+            "CUDA tracker requires the worker-slam image."
+        ) from exc
     if not torch.cuda.is_available():
-        return _DpvoSession
+        raise DpvoUnavailableError(
+            "dpvo: torch.cuda.is_available() is False. The tracker "
+            "needs an NVIDIA GPU + nvidia-container-toolkit "
+            "passthrough."
+        )
     try:
-        # The upstream package is `dpvo`; the tracker class lives at
-        # `dpvo.dpvo.DPVO`. Probe the import the CUDA session uses so a
-        # missing C++ extension surfaces here, not on the first frame.
         import dpvo.dpvo  # noqa: F401, PLC0415
         from app.processors.slam.dpvo_cuda import DpvoCudaSession  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
-        log.info(
-            "dpvo: real CUDA tracker not importable (%s); using simulated",
-            exc,
-        )
-        return _DpvoSession
+        raise DpvoUnavailableError(
+            "dpvo: the upstream DPVO source isn't importable in this "
+            f"worker ({type(exc).__name__}: {exc}). Check the dpvo "
+            "install + C++ extension build in worker/Dockerfile.slam."
+        ) from exc
     return DpvoCudaSession
 
 

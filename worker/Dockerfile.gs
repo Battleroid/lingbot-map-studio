@@ -68,7 +68,13 @@ RUN pip install --no-cache-dir \
         "lpips==0.1.4" \
         "wandb==0.17.7" \
         "evo==1.28.0" \
-        "matplotlib==3.9.2"
+        "matplotlib==3.9.2" \
+        "open3d==0.18.0"
+        # ^ open3d is the next missing-import we hit after wandb;
+        # MonoGS imports it eagerly during scene construction even
+        # when the user isn't running a viewer that needs it. ~500 MB
+        # uncompressed but mandatory; pinning to 0.18.0 (the last
+        # version with prebuilt wheels for Python 3.11 + torch 2.3).
 
 # Build deps for MonoGS source build (its 3DGS rasterizer ships its own
 # CUDA extensions).

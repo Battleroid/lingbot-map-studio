@@ -158,26 +158,17 @@ class SlamProcessor(Processor):
         kept_indices = await self._gate_frames(ctx, frames_total)
 
         await ctx.set_status("slam")
+        # `_make_session` calls into each backend's `select_session_cls`,
+        # which now raises `*UnavailableError` if the real CUDA stack
+        # isn't installed. The runner's outer except clause catches
+        # the exception and marks the job failed with the install-
+        # instruction message — no silent simulated output. (The
+        # previous "simulated tracker — output is a placeholder" warn
+        # event used to fire here when the resolver fell back; that
+        # path is gone in production. The simulated classes still
+        # exist for tests + the live-capture preview wrapper, both
+        # of which instantiate them directly.)
         session = self._make_session(ctx)
-        # Be honest with the user when we're running the placeholder. The
-        # SimulatedSlamSession produces plausible-looking output for plumbing
-        # tests but isn't real reconstruction — surface that loudly in the log
-        # pane instead of only the container's stderr.
-        from app.processors.slam.tracker import SimulatedSlamSession
-        if isinstance(session, SimulatedSlamSession):
-            await ctx.publish(
-                JobEvent(
-                    job_id=ctx.job_id,
-                    stage="system",
-                    level="warn",
-                    message=(
-                        f"{self.id}: simulated tracker — output is a placeholder. "
-                        f"Install the real upstream package in worker/Dockerfile.slam "
-                        f"for real reconstruction."
-                    ),
-                    data={"backend": self.id, "simulated": True},
-                )
-            )
         result = await self._track(ctx, session, kept_indices)
         ctx.check_cancel()
 
