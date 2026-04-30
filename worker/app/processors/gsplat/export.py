@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -123,36 +122,81 @@ def append_training_log(
         f.write(json.dumps(row) + "\n")
 
 
-def write_sogs_placeholder(
+def write_compressed_splat(
     out: Path,
     *,
-    splat_ply_path: Path,
-    iterations: int,
-    n_gaussians: int,
-) -> Optional[Path]:
-    """Placeholder for a future SOGS (compressed splat) exporter.
+    means: np.ndarray,
+    colors: np.ndarray,
+    opacities: np.ndarray,
+    scales: np.ndarray,
+    rotations: np.ndarray,
+) -> None:
+    """Write the antimatter15/OpenSplat compressed `.splat` format.
 
-    The real implementation invokes `splat-transform` / the nerfstudio
-    SOGS encoder. Until that dep lands in `worker-gs` we emit a sidecar
-    JSON that describes the source PLY so the UI can at least show a
-    download link; the splat viewer keeps rendering from the PLY.
+    This is the 32-byte-per-gaussian binary the antimatter15/splat
+    viewer, Spark (sparkjs.dev), and OpenSplat's `--resume` path read.
+    Layout (little-endian throughout):
+
+        bytes  0..11   3 × float32   — position xyz
+        bytes 12..23   3 × float32   — scale xyz   (post-exp from log)
+        bytes 24..27   4 × uint8     — RGBA        (R,G,B,opacity_255)
+        bytes 28..31   4 × uint8     — quat wxyz   (each = q*128+128)
+
+    No header, no version byte — the viewer infers count from
+    `byteLength / 32`. ~8× smaller than `splat.ply` for the same
+    gaussian set since SH coefficients aren't carried.
+
+    Argument shapes match `write_splat_ply` so callers can pass the
+    same `TrainerState.as_kwargs()` to either writer.
+
+      means     (N, 3) float — world-space positions
+      colors    (N, 3) float in [0, 1] — linear RGB
+      opacities (N,)   float — *raw logits*; sigmoid is applied here
+      scales    (N, 3) float — *log-space*; exp is applied here
+      rotations (N, 4) float — quaternion wxyz (need not be unit-norm;
+                               normalised before encoding)
     """
     out.parent.mkdir(parents=True, exist_ok=True)
-    # Sidecar-as-JSON: real SOGS is a tarball of bin+meta, but the UI
-    # download handler just streams whatever file is here. Leaving the
-    # format stub-like keeps it obvious this isn't a real SOGS yet.
-    out.write_text(
-        json.dumps(
-            {
-                "format": "sogs_placeholder",
-                "source": splat_ply_path.name,
-                "iterations": iterations,
-                "n_gaussians": n_gaussians,
-                "note": "replace with real SOGS output once the encoder ships",
-            }
-        )
+    n = means.shape[0]
+    if n == 0:
+        out.write_bytes(b"")
+        return
+
+    # Decode trainer-internal representations into the format the
+    # viewer expects: scale = exp(log_scale), opacity = sigmoid(logit).
+    scale_real = np.exp(scales).astype(np.float32)
+    op_255 = np.clip(_sigmoid(opacities) * 255.0, 0.0, 255.0).astype(np.uint8)
+    rgb_255 = np.clip(colors, 0.0, 1.0) * 255.0
+
+    rot = np.asarray(rotations, dtype=np.float64)
+    norm = np.linalg.norm(rot, axis=1, keepdims=True)
+    norm[norm == 0.0] = 1.0  # avoid /0 on zero-quat rows
+    rot = rot / norm
+    # The viewer reverses with `(byte - 128) / 128`, so encode with
+    # `byte = round(q * 128 + 128)`. clip to [0, 255] in case of
+    # numerical drift past unit norm.
+    rot_bytes = np.clip(np.round(rot * 128.0 + 128.0), 0.0, 255.0).astype(np.uint8)
+
+    dtype = np.dtype(
+        [
+            ("pos", "<f4", 3),
+            ("scale", "<f4", 3),
+            ("rgba", "u1", 4),
+            ("rot", "u1", 4),
+        ]
     )
-    return out
+    arr = np.empty(n, dtype=dtype)
+    arr["pos"] = means.astype(np.float32)
+    arr["scale"] = scale_real
+    arr["rgba"][:, :3] = rgb_255.astype(np.uint8)
+    arr["rgba"][:, 3] = op_255
+    arr["rot"] = rot_bytes
+
+    out.write_bytes(arr.tobytes())
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))
 
 
 # ----------------------------------------------------------------------

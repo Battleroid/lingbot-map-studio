@@ -325,6 +325,7 @@ export type ArtifactKind =
   | "npz"
   | "json"
   | "splat_ply"
+  | "splat_compressed"
   | "splat_sogs"
   | "pose_graph_json"
   | "keyframes_jsonl";

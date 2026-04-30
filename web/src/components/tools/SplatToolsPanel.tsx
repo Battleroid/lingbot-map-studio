@@ -22,8 +22,8 @@ const TIPS = {
     "Toggle individual render layers. Useful for comparing the raw splat against a baked mesh or for hiding the camera-path line while navigating.",
   download_splat:
     "Download the trained splat.ply in standard 3DGS format. Loads directly into Spark, nerfstudio viewer, mkkellogg/GaussianSplats3D, and Luma's viewer.",
-  download_sogs:
-    "Download the SOGS sidecar (compressed splat placeholder until the real encoder ships).",
+  download_compressed:
+    "Download the compressed antimatter15/OpenSplat .splat (32 bytes per gaussian, ~8× smaller than the PLY). Same scene, lighter file. Loads in Spark, antimatter15's viewer, and OpenSplat's resume path.",
 };
 
 export function SplatToolsPanel({ jobId, manifest, collapsible }: Props) {
@@ -43,8 +43,9 @@ export function SplatToolsPanel({ jobId, manifest, collapsible }: Props) {
       a.suffix === "ply" &&
       (a.name === "splat.ply" || a.name.startsWith("splat_")),
   )?.name;
-  const sogsName = manifest?.artifacts.find((a) => a.name === "splat.sogs")
-    ?.name;
+  const compressedName = manifest?.artifacts.find(
+    (a) => a.name === "splat.splat",
+  )?.name;
 
   // Silence the unused-setter warning at compile time while reserving the
   // state slot for the real server-side prune / crop actions below.
@@ -138,10 +139,10 @@ export function SplatToolsPanel({ jobId, manifest, collapsible }: Props) {
             </a>
           </Tip>
         )}
-        {sogsName && (
-          <Tip text={TIPS.download_sogs} showIcon={false}>
+        {compressedName && (
+          <Tip text={TIPS.download_compressed} showIcon={false}>
             <a
-              href={artifactUrl(jobId, sogsName)}
+              href={artifactUrl(jobId, compressedName)}
               download
               style={{
                 display: "block",
@@ -152,7 +153,7 @@ export function SplatToolsPanel({ jobId, manifest, collapsible }: Props) {
                 color: "var(--fg)",
               }}
             >
-              splat.sogs
+              {compressedName}
             </a>
           </Tip>
         )}

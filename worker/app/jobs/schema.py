@@ -55,6 +55,11 @@ ArtifactKind = Literal[
     "json",
     # SLAM / GS additions (kinds used from Phase 4 / Phase 5 onward).
     "splat_ply",
+    # Antimatter15/OpenSplat 32-byte-per-gaussian compressed format.
+    # Loadable by Spark, antimatter15's viewer, OpenSplat's resume path.
+    "splat_compressed",
+    # Niantic SOGS — kept on the kind enum for back-compat with any
+    # historical artifacts on disk; the trainer no longer emits new ones.
     "splat_sogs",
     "pose_graph_json",
     "keyframes_jsonl",
