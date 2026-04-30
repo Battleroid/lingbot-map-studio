@@ -118,18 +118,32 @@ RUN git clone --recursive https://github.com/rmurai0610/MASt3R-SLAM.git /opt/mas
 
 # DROID-SLAM (Phase 3). Custom CUDA extensions in `droid_backends/`.
 # Adds ~5 min to a clean image build when the build succeeds.
+#
+# `--recursive` is required: DROID-SLAM declares two submodules
+# (`thirdparty/lietorch` + `thirdparty/pytorch_scatter`), and
+# `lietorch` itself nests an `eigen` submodule. Without `--recursive`
+# the nvcc compile of `src/droid_kernels.cu` blows up at
+# `#include <Eigen/Sparse>` with `fatal error: Eigen/Sparse: No such
+# file or directory` because `thirdparty/lietorch/eigen/` is empty.
 ARG DROID_SLAM_SHA=main
-RUN git clone https://github.com/princeton-vl/DROID-SLAM.git /opt/droid-slam \
+RUN git clone --recursive https://github.com/princeton-vl/DROID-SLAM.git /opt/droid-slam \
     && cd /opt/droid-slam \
     && git checkout ${DROID_SLAM_SHA} \
+    && git submodule update --init --recursive \
     && pip install --no-cache-dir --no-build-isolation . \
     && cd / && rm -rf /opt/droid-slam/.git
 
 # DPVO (Phase 4). Lightweight, ~2 min build.
+#
+# `--recursive` for the same reason DROID-SLAM needs it: DPVO declares
+# `Pangolin` + `DBoW2` submodules referenced by its setup.py / CUDA
+# extensions. Preemptive — without it the build would fail at compile
+# time with a missing-include error analogous to the DROID-SLAM one.
 ARG DPVO_SHA=main
-RUN git clone https://github.com/princeton-vl/DPVO.git /opt/dpvo \
+RUN git clone --recursive https://github.com/princeton-vl/DPVO.git /opt/dpvo \
     && cd /opt/dpvo \
     && git checkout ${DPVO_SHA} \
+    && git submodule update --init --recursive \
     && pip install --no-cache-dir --no-build-isolation . \
     && cd / && rm -rf /opt/dpvo/.git
 
