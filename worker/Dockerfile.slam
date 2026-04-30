@@ -46,6 +46,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV FORCE_CUDA=1
 ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
 
+# Explicit CUDA env for setup.py CUDAExtension probes. The base image
+# (nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04) installs the toolkit at
+# /usr/local/cuda but doesn't always export CUDA_HOME on every shell —
+# torch's `CUDAExtension` sniffs that env var to locate nvcc and the
+# headers, and falls over silently when it's unset. Setting it here
+# means MASt3R-SLAM / DROID-SLAM / DPVO all find nvcc deterministically.
+# Mirrors the same block in Dockerfile.gs (PR #51) and Dockerfile.api.
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:${PATH}
+
 # Common pip-install flags for the upstream source builds:
 #   --no-build-isolation  — pip's isolated build env doesn't see the
 #                           image's numpy + torch, which the upstream
@@ -69,9 +79,42 @@ ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
 
 # MASt3R-SLAM (Phase 2). Calibration-free; the safe default. Source
 # build pulls in MASt3R + DUSt3R as deps.
-ARG MAST3R_SLAM_SHA=main
-RUN pip install --no-cache-dir --no-build-isolation \
-        "git+https://github.com/rmurai0610/MASt3R-SLAM.git@${MAST3R_SLAM_SHA}"
+#
+# Pinned to a verified SHA rather than `main` because we sed-patch the
+# upstream `setup.py` below (see comment at the sed line) and a pin
+# guarantees the patch keeps matching. Upstream has no tags / releases
+# (active research repo), so a SHA is the closest equivalent to
+# "latest release". Bump it the same way you'd bump any other dep —
+# verify the sed pattern still matches the new commit's setup.py, then
+# update this line. Safe to delete the pin and float on `main` once
+# upstream lands a fix for the `ext_modules` NameError noted below.
+ARG MAST3R_SLAM_SHA=e6f4e3d474fad0e11f561482012be864ba8c3f17
+RUN git clone --recursive https://github.com/rmurai0610/MASt3R-SLAM.git /opt/mast3r-slam \
+    && cd /opt/mast3r-slam \
+    && git checkout ${MAST3R_SLAM_SHA} \
+    # Patch upstream's `has_cuda = torch.cuda.is_available()` gate.
+    # `setup.py` defines `ext_modules = [CUDAExtension(...)]` only
+    # inside `if has_cuda:` and never sets it in the `else:` branch
+    # — so on a host without runtime CUDA (every `docker build`
+    # invocation, since we don't expose a GPU at build time) the
+    # else-branch fires, prints "CUDA not found, cannot compile
+    # backend!", and the final `setup(ext_modules=ext_modules, ...)`
+    # call dies with `NameError: name 'ext_modules' is not defined`.
+    #
+    # FORCE_CUDA=1 + TORCH_CUDA_ARCH_LIST + CUDA_HOME (set above) tell
+    # torch's CUDAExtension machinery to cross-compile the .cu sources
+    # via nvcc without a runtime GPU — exactly the same path that
+    # already builds simple-knn / diff-gaussian-rasterization / DROID
+    # / DPVO kernels. The only missing piece is forcing the gate so
+    # the CUDAExtension is actually defined; nvcc handles the real
+    # CUDA toolchain probe at compile time.
+    #
+    # Idempotent: a second run finds no match and is a no-op (sed -i
+    # silently passes when the pattern doesn't match). Same spirit as
+    # the simple_knn `<float.h>` patch in Dockerfile.gs (PR #53).
+    && sed -i 's|^has_cuda = torch.cuda.is_available()$|has_cuda = True  # patched: FORCE_CUDA=1 + TORCH_CUDA_ARCH_LIST set in Dockerfile.slam — nvcc cross-compiles|' setup.py \
+    && pip install --no-cache-dir --no-build-isolation . \
+    && cd / && rm -rf /opt/mast3r-slam/.git
 
 # DROID-SLAM (Phase 3). Custom CUDA extensions in `droid_backends/`.
 # Adds ~5 min to a clean image build when the build succeeds.
