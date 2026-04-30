@@ -139,11 +139,22 @@ RUN git clone --recursive https://github.com/princeton-vl/DROID-SLAM.git /opt/dr
 # `Pangolin` + `DBoW2` submodules referenced by its setup.py / CUDA
 # extensions. Preemptive — without it the build would fail at compile
 # time with a missing-include error analogous to the DROID-SLAM one.
+#
+# Eigen is NOT a submodule for DPVO — upstream's README directs you to
+# `wget` the eigen-3.4.0 zip and unpack it into `thirdparty/`. The
+# CUDA extensions reference it via `-I.../thirdparty/eigen-3.4.0`
+# (`setup.py` lines 22 + 28). Without this header tree the C++ build
+# fails with `fatal error: Eigen/Core: No such file or directory` in
+# both `dpvo/fastba/ba.cpp` and `dpvo/fastba/block_e.cu`. We `git
+# clone` the eigen 3.4.0 tag in place of the zip download — same
+# content, no need for wget / unzip in the image.
 ARG DPVO_SHA=main
 RUN git clone --recursive https://github.com/princeton-vl/DPVO.git /opt/dpvo \
     && cd /opt/dpvo \
     && git checkout ${DPVO_SHA} \
     && git submodule update --init --recursive \
+    && git clone --depth 1 --branch 3.4.0 https://gitlab.com/libeigen/eigen.git thirdparty/eigen-3.4.0 \
+    && rm -rf thirdparty/eigen-3.4.0/.git \
     && pip install --no-cache-dir --no-build-isolation . \
     && cd / && rm -rf /opt/dpvo/.git
 
