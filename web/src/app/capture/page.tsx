@@ -36,6 +36,28 @@ function isCaptureBackend(s: string | null | undefined): s is CaptureBackend {
   );
 }
 
+/** Backends whose live preview is *meant* to look like a gaussian
+ *  splat — i.e. ones where surfacing a point/splat overlay on top of
+ *  the camera view actually represents the eventual reconstruction.
+ *
+ *  For everything else (mast3r_slam / droid_slam / dpvo) the mobile
+ *  capture page is "just a shorthand for uploading video/images" —
+ *  the SLAM backend ingests the captured frames after stop and the
+ *  user reviews the result on the job page, not live during scanning.
+ *  Rendering the simulated tracker's camera-ray-fan points on top of
+ *  the camera view there is misleading + clutter, not feedback —
+ *  so we hide both the camera-view points overlay AND the PiP canvas
+ *  for those backends.
+ *
+ *  monogs is the only entry today; future splat-emitting backends
+ *  (e.g. a `gsplat-streaming` wrapper, an OpenSplat adapter) would
+ *  be added here. Keep this set conservative: the cost of including
+ *  a backend incorrectly is the camera-clustering artefact the user
+ *  has been calling out for several iterations. */
+const BACKENDS_WITH_SPLAT_OVERLAY: ReadonlySet<CaptureBackend> = new Set([
+  "monogs",
+]);
+
 const CAPTURE_BUTTON_STYLE: CSSProperties = {
   padding: "12px 24px",
   fontSize: "var(--fs-md)",
@@ -98,6 +120,7 @@ function CapturePageInner() {
     ? backendFromQuery
     : "mast3r_slam";
   const [backend, setBackend] = useState<CaptureBackend>(initialBackend);
+  const showSplatOverlay = BACKENDS_WITH_SPLAT_OVERLAY.has(backend);
   const [deviceId, setDeviceId] = useState<string | undefined>(undefined);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [busy, setBusy] = useState<"start" | "stop" | null>(null);
@@ -259,7 +282,7 @@ function CapturePageInner() {
           fps={10}
           deviceId={deviceId}
         />
-        {capturing && <CameraOverlayPoints />}
+        {capturing && showSplatOverlay && <CameraOverlayPoints />}
       </div>
 
       {/* Coverage canvas. PiP on portrait (top-left, 35% × 35%);
@@ -269,7 +292,14 @@ function CapturePageInner() {
        *  view unobstructed without losing the option to pull the PiP
        *  back. The Scaniverse-style mask on the camera view itself
        *  conveys captured/uncaptured separately, so the PiP is
-       *  optional information rather than the primary cue. */}
+       *  optional information rather than the primary cue.
+       *
+       *  Hidden entirely for non-splat backends (mast3r_slam /
+       *  droid_slam / dpvo) — there the mobile capture is just a
+       *  video uploader, the SLAM job runs after stop, so the live
+       *  cloud + camera-path preview the PiP shows would be either
+       *  empty (no streaming pose) or simulated-tracker noise. */}
+      {showSplatOverlay && (
       <div
         className={`capture-canvas-pane${
           pipCollapsed ? " capture-canvas-pane--collapsed" : ""
@@ -370,6 +400,7 @@ function CapturePageInner() {
           </>
         )}
       </div>
+      )}
 
       {/* Stats + controls overlay.
        *  Two frame counters intentionally: `frames sent` is how many

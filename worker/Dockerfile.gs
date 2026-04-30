@@ -125,6 +125,21 @@ RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     # `ModuleNotFoundError: No module named 'simple_knn'` because
     # the wheel never builds.
     && sed -i '1i #include <float.h>' submodules/simple-knn/simple_knn.cu \
+    # Patch upstream slam.py's unconditional GUI import. The bare line
+    #   from gui import gui_utils, slam_gui
+    # at module top loads `gui/slam_gui.py` even when `Results.use_gui`
+    # is False — and slam_gui pulls in a full desktop GUI stack (glfw,
+    # imgviz, PyOpenGL) we don't ship in the headless worker. We do
+    # need `gui_utils` (it only imports cv2 + open3d + torch, all
+    # already in the image), and gui_utils.ParamsGUI is constructed
+    # unconditionally by SLAM.__init__; but `slam_gui.run` is only
+    # called inside `if self.use_gui:`, so a no-op stand-in works. The
+    # sed below splits the import + introduces `types.SimpleNamespace`
+    # as a stub. Idempotent: a second run finds no match and is a
+    # no-op. Without this patch every post-stop MonoGS job dies with
+    # `ModuleNotFoundError: No module named 'glfw'` six lines into
+    # slam.py's imports.
+    && sed -i 's|^from gui import gui_utils, slam_gui$|from gui import gui_utils\nimport types as _t\nslam_gui = _t.SimpleNamespace(run=lambda *a, **kw: None)|' slam.py \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git
