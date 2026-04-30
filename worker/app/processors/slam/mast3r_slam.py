@@ -32,40 +32,48 @@ class _Mast3rSlamSession(SimulatedSlamSession):
     depth_noise: ClassVar[float] = 0.1
 
 
+class Mast3rSlamUnavailableError(RuntimeError):
+    """Raised by `select_session_cls()` when the real MASt3R-SLAM CUDA
+    tracker can't be loaded. Mirrors the gsplat / MonoGS strict
+    pattern: we no longer silently fall back to `_Mast3rSlamSession`,
+    since the simulated tracker produces synthetic geometry that the
+    user has called out as "useless". The live-capture wrapper in
+    `live_session.py` catches this and uses the simulated class for
+    the live preview only — production reconstruction always errors
+    out loud rather than shipping placeholder output as if it were
+    real."""
+
+
 def select_session_cls() -> type[SlamSession]:
-    """Auto-select the CUDA session when its dependencies are all
-    importable; fall back to the simulated session otherwise.
-
-    Three failure modes roll into the same fallback path:
-      * `torch` not installed (CPU dev box).
-      * `torch.cuda.is_available()` False (worker-slam without GPU).
-      * `mast3r_slam` package not installed (image hasn't shipped Phase 2
-        yet, or the source build failed at image build time).
-
-    Phase 0's warn event fires in the SlamProcessor when the returned
-    session is a SimulatedSlamSession instance, so the user always
-    sees in-UI signal that they're watching a placeholder.
+    """Resolve the real MASt3R-SLAM CUDA session. Raises
+    `Mast3rSlamUnavailableError` with install instructions when any
+    prerequisite is missing. No simulated fallback in production.
     """
     try:
         import torch  # noqa: PLC0415
-    except ImportError:
-        return _Mast3rSlamSession
+    except ImportError as exc:
+        raise Mast3rSlamUnavailableError(
+            "mast3r_slam: torch is not installed in this worker. The "
+            "real CUDA tracker requires the worker-slam image (built "
+            "from worker/Dockerfile.slam)."
+        ) from exc
     if not torch.cuda.is_available():
-        return _Mast3rSlamSession
+        raise Mast3rSlamUnavailableError(
+            "mast3r_slam: torch.cuda.is_available() is False. The "
+            "tracker needs an NVIDIA GPU + nvidia-container-toolkit "
+            "passthrough; check the worker-slam container's "
+            "deploy.resources.reservations.devices in docker-compose.yml."
+        )
     try:
-        # Probe the import surface used by the CUDA session. If any of
-        # these fail (missing wheel, source build failed, CUDA mismatch),
-        # the wrapper module's own internal import of
-        # `mast3r_slam.tracker` would have raised the same error — better
-        # to detect at session-pick time than at first frame.
         import mast3r_slam.tracker  # noqa: F401, PLC0415
         from app.processors.slam.mast3r_cuda import Mast3rCudaSession  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
-        log.info(
-            "mast3r_slam: real CUDA tracker not importable (%s); using simulated",
-            exc,
-        )
-        return _Mast3rSlamSession
+        raise Mast3rSlamUnavailableError(
+            "mast3r_slam: the upstream MASt3R-SLAM source isn't "
+            f"importable in this worker ({type(exc).__name__}: {exc}). "
+            "Check that worker/Dockerfile.slam clones MASt3R-SLAM into "
+            "the image and that its CUDA submodule build succeeded."
+        ) from exc
     return Mast3rCudaSession
 
 

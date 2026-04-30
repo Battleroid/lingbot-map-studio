@@ -28,27 +28,39 @@ class _DroidSlamSession(SimulatedSlamSession):
     depth_noise: ClassVar[float] = 0.15
 
 
+class DroidSlamUnavailableError(RuntimeError):
+    """Raised when the real DROID-SLAM CUDA tracker can't be loaded.
+    Same strict-no-fallback policy as the other backends — no
+    silent simulated output in production."""
+
+
 def select_session_cls() -> type[SlamSession]:
-    """Auto-select the CUDA session when its dependencies are all
-    importable; fall back to the simulated session otherwise."""
+    """Resolve the real DROID-SLAM CUDA session. Raises
+    `DroidSlamUnavailableError` with install instructions when any
+    prerequisite is missing."""
     try:
         import torch  # noqa: PLC0415
-    except ImportError:
-        return _DroidSlamSession
+    except ImportError as exc:
+        raise DroidSlamUnavailableError(
+            "droid_slam: torch is not installed in this worker. The "
+            "real CUDA tracker requires the worker-slam image."
+        ) from exc
     if not torch.cuda.is_available():
-        return _DroidSlamSession
+        raise DroidSlamUnavailableError(
+            "droid_slam: torch.cuda.is_available() is False. The "
+            "tracker needs an NVIDIA GPU + nvidia-container-toolkit "
+            "passthrough."
+        )
     try:
-        # Probe the import surface used by the CUDA session. The package
-        # ships custom CUDA extensions under `droid_backends`; if that
-        # native module is missing the import will raise.
         import droid_slam  # noqa: F401, PLC0415
         from app.processors.slam.droid_cuda import DroidCudaSession  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
-        log.info(
-            "droid_slam: real CUDA tracker not importable (%s); using simulated",
-            exc,
-        )
-        return _DroidSlamSession
+        raise DroidSlamUnavailableError(
+            "droid_slam: the upstream DROID-SLAM source isn't "
+            f"importable in this worker ({type(exc).__name__}: {exc}). "
+            "Check the droid-slam install + CUDA-extension build in "
+            "worker/Dockerfile.slam."
+        ) from exc
     return DroidCudaSession
 
 

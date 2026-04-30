@@ -13,16 +13,22 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_slam_emits_warn_event_when_session_is_simulated(
+async def test_slam_processor_raises_when_real_tracker_unavailable(
     tmp_data_dir, synthetic_frames
 ):
-    """SlamProcessor.run should emit a level=warn JobEvent right after
-    `_make_session()` returns the placeholder SimulatedSlamSession, so the
-    user sees in the log pane that the output isn't real."""
+    """The simulated-fallback warn path was removed in the strict-
+    no-simulated cleanup. `Mast3rSlamProcessor._make_session` now
+    raises `Mast3rSlamUnavailableError` when the real CUDA stack is
+    missing — the runner's outer except marks the job failed with
+    the install-instruction message instead of silently running the
+    placeholder and emitting a warn."""
     from app.jobs.cancel import CancelToken
     from app.jobs.schema import Mast3rSlamConfig
     from app.processors.base import JobContext
-    from app.processors.slam.mast3r_slam import Mast3rSlamProcessor
+    from app.processors.slam.mast3r_slam import (
+        Mast3rSlamProcessor,
+        Mast3rSlamUnavailableError,
+    )
 
     job_id = "warn-slam-001"
     job_dir = tmp_data_dir / "jobs" / job_id
@@ -71,8 +77,10 @@ async def test_slam_emits_warn_event_when_session_is_simulated(
 
     processor._ingest = _fake_ingest  # type: ignore[assignment]
 
-    await processor.run(ctx)
+    with pytest.raises(Mast3rSlamUnavailableError):
+        await processor.run(ctx)
 
+    # No simulated-tracker warn event should be emitted anymore.
     sim_warns = [
         e
         for e in events
@@ -80,15 +88,10 @@ async def test_slam_emits_warn_event_when_session_is_simulated(
         and e.stage == "system"
         and "simulated" in e.message.lower()
     ]
-    assert sim_warns, (
-        "expected a level=warn event mentioning the simulated tracker; got "
-        f"{[(e.level, e.stage, e.message[:60]) for e in events]}"
+    assert not sim_warns, (
+        "no simulated-tracker warn should fire — production must "
+        f"either run real or fail loud. got: {[e.message[:60] for e in sim_warns]}"
     )
-    # Backend id is in the message + data so a user filtering by backend can
-    # still find it.
-    assert "mast3r_slam" in sim_warns[0].message
-    assert sim_warns[0].data.get("simulated") is True
-    assert sim_warns[0].data.get("backend") == "mast3r_slam"
 
 
 @pytest.mark.asyncio
