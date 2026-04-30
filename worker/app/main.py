@@ -1155,7 +1155,14 @@ async def capture_stream(ws: WebSocket, session_id: str) -> None:
                         img.shape[1],
                         img.shape[0],
                     )
-                await session.push_frame(frame_idx, img)
+                # Pass the raw JPEG bytes alongside the decoded image so
+                # the session can persist them to its job_dir/frames/.
+                # That's what makes the captured job a real-input job
+                # the worker can re-reconstruct from later — without
+                # the bytes on disk, the post-stop job has nothing to
+                # process and the user gets a synthetic-only artifact
+                # set (the original 0-frames-on-restart bug report).
+                await session.push_frame(frame_idx, img, raw_bytes=bytes(data))
                 frame_idx += 1
             except Exception as exc:  # noqa: BLE001
                 log.warning("capture %s: frame decode failed: %s", session_id, exc)

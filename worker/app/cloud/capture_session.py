@@ -96,6 +96,7 @@ class CaptureSession:
         self._task: Optional[asyncio.Task] = None
         self._stopped = False
         self._frame_count = 0
+        self._frames_persisted = 0
         self._dropped = 0
         self._last_activity = time.monotonic()
         # Buffered for finalize().
@@ -103,14 +104,29 @@ class CaptureSession:
         self._points_buffer: list[np.ndarray] = []
         self._intrinsics: Optional[np.ndarray] = None
         self._image_shape: Optional[tuple[int, int]] = None
-        # Per-session scratch dir. Lives outside the regular `jobs/`
-        # tree because the session isn't a Job until `_finalize_to_disk`
-        # runs and promotes it. The live splat preview lands here as
-        # `splat.ply`, which the api serves at
-        # `/api/capture/{session_id}/preview/splat.ply`. MonoGS's
-        # `set_artifact_dir(...)` also targets this dir so its final
-        # splat output ends up alongside.
-        self.preview_dir: Path = settings.data_dir / "captures" / session_id / "preview"
+        # Pre-allocate the future Job's id + on-disk layout so we can
+        # stream the JPEG payloads straight to `<job_dir>/frames/`
+        # while the user is scanning. The capture's stop step then
+        # only needs to flip the Job row from non-existent to
+        # `queued` — no copy/move is required because the bytes
+        # already live in the canonical place.
+        #
+        # Why this matters: the simulated tracker that runs in the
+        # api process is a placeholder, not a real reconstruction.
+        # The real backends (mast3r-slam, monogs, etc.) live in the
+        # worker-slam / worker-gs containers. Persisting the raw
+        # frames lets the regular claim loop pick the captured job
+        # up after stop, run the real GPU backend on it, and produce
+        # output that actually represents what the user scanned.
+        self.job_id: str = "cap" + uuid.uuid4().hex[:10]
+        self.job_dir: Path = settings.job_dir(self.job_id)
+        self.frames_dir: Path = self.job_dir / "frames"
+        self.artifacts_dir: Path = self.job_dir / "artifacts"
+        # Live-preview splat sits under the same job dir so it's
+        # reachable via `/api/capture/{session_id}/preview/splat.ply`
+        # while the session is live; the file gets superseded by the
+        # worker's real splat output when the queued job runs.
+        self.preview_dir: Path = self.job_dir / "preview"
         self._last_preview_emit_t: float = 0.0
         self._preview_count: int = 0
 
@@ -119,10 +135,12 @@ class CaptureSession:
         from app.processors.slam.live_session import resolve_live_session
 
         self._slam_session = resolve_live_session(self.backend)
-        # MonoGS (and any future splat-emitting SLAM backend) writes a
-        # final splat.ply at finalize() time. Hand it our preview_dir
-        # so the file lands somewhere the finalize-to-job promotion
-        # can sweep up.
+        # Pre-create the on-disk layout. `frames/` will be filled
+        # frame-by-frame as the WS receives them; the worker that
+        # eventually claims this job reads from there. `preview/`
+        # holds the live splat snapshot the live UI fetches.
+        self.frames_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.preview_dir.mkdir(parents=True, exist_ok=True)
         if hasattr(self._slam_session, "set_artifact_dir"):
             try:
@@ -136,13 +154,44 @@ class CaptureSession:
         await self._emit("ready", {"backend": self.backend})
         self._task = asyncio.create_task(self._run())
 
-    async def push_frame(self, idx: int, img_bgr: np.ndarray) -> None:
+    async def push_frame(
+        self,
+        idx: int,
+        img_bgr: np.ndarray,
+        raw_bytes: Optional[bytes] = None,
+    ) -> None:
         """Called by the WS handler for each binary message received.
         Drops the frame if the queue is full — the SLAM step rate is
-        the bottleneck and queueing more would just stale the cloud."""
+        the bottleneck and queueing more would just stale the cloud.
+
+        `raw_bytes` is the original JPEG payload from the phone; if
+        present, it gets persisted to `frames_dir` under a session-
+        local monotonic counter. Persisting these frames is what
+        lets the queued post-stop job actually get reconstructed by
+        the real GPU backend in worker-slam / worker-gs (the
+        simulated tracker that runs in this api process produces
+        placeholder output that doesn't represent the scene)."""
         if self._stopped:
             return
         self._last_activity = time.monotonic()
+        if raw_bytes is not None:
+            # File numbering is session-local and monotonic so reconnects
+            # don't overwrite earlier frames (the WS handler's frame_idx
+            # restarts at 0 on each new socket). Write straight through —
+            # JPEG is the wire format, no need to re-encode.
+            counter = self._frames_persisted
+            self._frames_persisted += 1
+            target = self.frames_dir / f"{counter:06d}.jpg"
+            try:
+                target.write_bytes(raw_bytes)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "capture_session %s: failed to persist frame %d: %s",
+                    self.id,
+                    counter,
+                    exc,
+                )
+                self._frames_persisted -= 1
         try:
             self.frame_queue.put_nowait(
                 FramePacket(idx=idx, img_bgr=img_bgr, received_at=time.monotonic())
@@ -338,126 +387,111 @@ class CaptureSession:
         )
 
     async def _finalize_to_disk(self) -> "FinalizeResult":
-        """Run the SLAM session's finalize + persist a regular Job."""
-        if self._slam_session is None:
-            return FinalizeResult(job_id=None, ok=False, error="never started")
+        """Promote the captured frames into a regular `queued` Job and
+        let the worker tier run real SLAM/MonoGS on them.
 
-        try:
-            result = await asyncio.to_thread(self._slam_session.finalize)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("capture_session %s finalize raised: %s", self.id, exc)
-            return FinalizeResult(job_id=None, ok=False, error=str(exc))
+        The previous implementation called `simulated_session.finalize()`
+        and wrote its synthetic poses + corner-feature point cloud into
+        the job's artifacts as if it were a real reconstruction, then
+        marked the Job `ready`. Result: the job page showed a splat
+        cloud that bore no resemblance to what the user had scanned
+        (poses drifted, points sat at fake depths). And gsplat-from-
+        source bounced the job with `409 ... no extracted frames` since
+        no images had been persisted.
 
-        # Promote into a regular Job so the user can hop to the job
-        # page + chain gsplat training off the captured run. Reuses
-        # the existing artifact write helpers from slam.export.
+        The fix: persist the JPEG payloads to `frames_dir` during the
+        WS session (already wired in `push_frame`), then on stop create
+        a Job in `queued` state with no uploads. The standard worker
+        claim loop picks it up, runs the real backend (mast3r-slam,
+        droid-slam, monogs, …) on the saved frames, and writes
+        artifacts that actually represent the scene. The simulated
+        in-process tracker still emits live preview events during the
+        scan but its outputs are now discarded at stop time.
+
+        Edge case: if zero frames made it through (decode failure, WS
+        bounced before any data, etc.) we surface a fail rather than
+        creating a job that's guaranteed to error with "no frames to
+        track" the moment a worker claims it."""
+        if self._frames_persisted == 0:
+            return FinalizeResult(
+                job_id=None,
+                ok=False,
+                error=(
+                    "no frames captured — check the WS connection / camera "
+                    "permission and try again"
+                ),
+            )
+
         from app.jobs import store
         from app.jobs.schema import (
-            Artifact,
+            DpvoConfig,
+            DroidSlamConfig,
             Job,
             JobEvent,
             Mast3rSlamConfig,
+            MonogsConfig,
         )
         from app.jobs.events import bus
-        from app.processors.slam import export as slam_export
+        from app.processors import worker_class_for
 
         await store.init_store()
-        job_id = "cap" + uuid.uuid4().hex[:10]
-        job_dir = settings.job_dir(job_id)
-        artifacts_dir = job_dir / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        intrinsics = (
-            self._intrinsics
-            if self._intrinsics is not None
-            else np.eye(3, dtype=np.float32)
+        # Map the dropdown's backend choice onto the matching job
+        # config class. Each one routes to the right worker + the
+        # right processor when the claim loop picks it up.
+        cfg_cls: dict[str, type] = {
+            "mast3r_slam": Mast3rSlamConfig,
+            "droid_slam": DroidSlamConfig,
+            "dpvo": DpvoConfig,
+            "monogs": MonogsConfig,
+        }
+        cfg = cfg_cls.get(self.backend, Mast3rSlamConfig)()
+        worker_class = worker_class_for(cfg)
+        job = Job(
+            id=self.job_id,
+            status="queued",
+            config=cfg,
+            uploads=[],
+            artifacts=[],
+            frames_total=self._frames_persisted,
         )
-        slam_export.write_pose_graph(
-            artifacts_dir / "pose_graph.json",
-            poses=result.poses,
-            keyframe_indices=result.keyframe_indices,
-            selected_indices=result.keyframe_indices,
-            intrinsics=intrinsics,
-            backend_id=self.backend,
-        )
-        slam_export.write_camera_path(
-            artifacts_dir / "camera_path.json", list(result.poses)
-        )
-        if result.points is not None and result.points.size > 0:
-            slam_export.write_ply(
-                artifacts_dir / "reconstruction.ply", result.points
-            )
+        await store.create_job(job, worker_class=worker_class)
 
-        artifacts: list[Artifact] = []
-        for name in ("pose_graph.json", "camera_path.json", "reconstruction.ply"):
-            p = artifacts_dir / name
-            if p.exists():
-                artifacts.append(Artifact(name=name, kind="ply" if name.endswith(".ply") else "json"))
-
-        # MonoGS (and the simulated MonoGS placeholder) emit a real
-        # splat.ply at finalize-time via `result.splat_ply_path`. Move
-        # it into the captured job's artifacts dir as `splat.ply` so
-        # the splat tool panel + viewer recognise it the same way they
-        # do a batch MonoGS run. Falls back to copying the live preview
-        # snapshot when the session didn't produce a finalize-time
-        # splat (e.g. a pure SLAM backend) — the user still gets a
-        # splat artifact built from the captured cloud.
-        import shutil
-
-        splat_src = getattr(result, "splat_ply_path", None)
-        if splat_src is None:
-            preview_splat = self.preview_dir / "splat.ply"
-            if preview_splat.exists():
-                splat_src = preview_splat
-        if splat_src is not None and Path(splat_src).exists():
-            splat_dst = artifacts_dir / "splat.ply"
-            try:
-                shutil.copy2(splat_src, splat_dst)
-                artifacts.append(
-                    Artifact(name=splat_dst.name, kind="splat_ply")
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "capture_session %s: failed to carry splat into job (%s)",
-                    self.id,
-                    exc,
-                )
-
-        # The preview dir has served its purpose — the active session
-        # is wrapping up. Best-effort cleanup so /data doesn't grow
-        # forever from abandoned scratch dirs.
+        # Best-effort: mark a marker file so the worker's ingest step
+        # can tell "frames already extracted (capture path)" apart from
+        # "frames missing (data corruption)". The
+        # SlamProcessor._ingest short-circuit reads this.
+        marker = self.frames_dir / ".captured"
         try:
-            shutil.rmtree(self.preview_dir.parent, ignore_errors=True)
+            marker.write_text(
+                f"captured at {time.time()} via backend={self.backend}\n",
+                encoding="utf-8",
+            )
         except Exception:  # noqa: BLE001
             pass
 
-        # The captured config is shaped like a MASt3R-SLAM run —
-        # picking it as the default lets the JobList / viewer code
-        # treat the row identically to a batch SLAM run. The actual
-        # backend used at capture time is recorded in extras.
-        cfg = Mast3rSlamConfig()
-        job = Job(
-            id=job_id,
-            status="ready",
-            config=cfg,
-            uploads=[],
-            artifacts=artifacts,
-            frames_total=self._frame_count,
-        )
-        await store.create_job(job, worker_class="slam")
-        await store.update_job(job_id, status="ready")
-
         await bus.publish(
             JobEvent(
-                job_id=job_id,
+                job_id=self.job_id,
                 stage="system",
                 level="info",
-                message=f"capture session {self.id} → job {job_id} ({self._frame_count} frames)",
-                data={"backend": self.backend, "captured": True},
+                message=(
+                    f"capture session {self.id} → job {self.job_id} "
+                    f"({self._frames_persisted} frames queued for "
+                    f"reconstruction via {cfg.processor})"
+                ),
+                data={
+                    "backend": self.backend,
+                    "captured": True,
+                    "frames_total": self._frames_persisted,
+                    "processor": cfg.processor,
+                    "worker_class": worker_class,
+                },
             )
         )
-        await bus.close(job_id)
-        return FinalizeResult(job_id=job_id, ok=True)
+        # Don't close the bus — the worker's events still need to flow
+        # through it once the job claim happens.
+        return FinalizeResult(job_id=self.job_id, ok=True)
 
 
 def _matrix_to_quat_xyzw(R: np.ndarray) -> list[float]:

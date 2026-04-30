@@ -43,61 +43,206 @@ def test_resolve_live_session_known_backends_return_a_session():
         assert isinstance(s, SlamSession), backend
 
 
+def _encode_jpeg(img: np.ndarray) -> bytes:
+    """Encode a BGR uint8 array as a JPEG byte string the way the
+    phone client does — used in tests below to drive the WS-equivalent
+    `push_frame(..., raw_bytes=...)` path."""
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    assert ok
+    return bytes(buf.tobytes())
+
+
 @pytest.mark.asyncio
-async def test_capture_session_round_trip(tmp_data_dir):
-    """Push 6 synthetic frames at the session, drain the emit queue,
-    stop, confirm a Job row with the expected artifacts is created."""
+async def test_capture_session_persists_frames_and_queues_real_job(
+    tmp_data_dir,
+):
+    """The capture session writes incoming JPEGs to `<job_dir>/frames/`
+    while the WS is live, then on stop creates a Job in *queued* state
+    so the regular worker claim loop picks it up and runs the real
+    GPU backend on the saved frames. Pre-fix behavior: the simulated
+    in-process tracker's synthetic outputs were written as final
+    artifacts and the Job was marked `ready` immediately — which
+    looked like a real reconstruction in the UI but bore no
+    resemblance to the scanned scene."""
     from app.cloud.capture_session import CaptureSession
 
     session = CaptureSession(session_id="test-cs-001", backend="mast3r_slam")
     await session.start()
 
     # Six 320×240 BGR frames of random pixels — the simulated tracker
-    # only cares about shape, not content.
+    # only cares about shape, not content. We pass the JPEG-encoded
+    # bytes alongside so the persistence path runs.
     rng = np.random.default_rng(0)
-    # Yield between pushes so the consumer drains rather than tripping
-    # the bounded-queue backpressure path. The realistic capture rate
-    # is 10 Hz (100 ms apart); the simulated tracker is faster than
-    # that, so all frames make it through.
     for idx in range(6):
         img = rng.integers(0, 255, size=(240, 320, 3), dtype=np.uint8)
-        await session.push_frame(idx, img)
+        await session.push_frame(idx, img, raw_bytes=_encode_jpeg(img))
         await asyncio.sleep(0.05)
 
-    # Give the background loop time to drain whatever's left.
+    # Give the background loop time to drain.
     deadline = asyncio.get_event_loop().time() + 4.0
     while session._frame_count < 6 and asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(0.05)
-    # At least half should have made it through — exact count depends
-    # on the simulated tracker's step latency.
     assert session._frame_count >= 3, (
         f"loop processed {session._frame_count}/6 frames before timeout"
     )
 
-    # We should have at least the "ready" message + per-frame poses
-    # + at least one points message in the emit queue.
+    # All six raw payloads should be on disk before stop is called.
+    on_disk = sorted(session.frames_dir.glob("*.jpg"))
+    assert len(on_disk) == 6, f"expected 6 frames on disk, got {len(on_disk)}"
+
     received: list[str] = []
     while not session.emit_queue.empty():
-        msg = session.emit_queue.get_nowait()
-        received.append(msg.type)
-    assert "ready" in received, received
-    assert "pose" in received, received
+        received.append(session.emit_queue.get_nowait().type)
+    assert "ready" in received
 
-    # Stop and confirm a Job got created.
+    # Stop creates a *queued* job (not ready) — the worker tier will
+    # run the real reconstruction. No artifacts at create time.
     result = await session.stop()
     assert result.ok, result.error
     assert result.job_id is not None
-    # Job row exists, status=ready, artifacts include the SLAM outputs.
+
     from app.jobs import store
 
     job = await store.get_job(result.job_id)
     assert job is not None
-    assert job.status == "ready"
-    artifact_names = {a.name for a in job.artifacts}
-    # camera_path.json + pose_graph.json should always be there;
-    # reconstruction.ply only when the simulated tracker emitted
-    # points (it does, by default).
-    assert "camera_path.json" in artifact_names or "pose_graph.json" in artifact_names
+    assert job.status == "queued", (
+        f"capture jobs must be queued so the worker re-runs SLAM; got "
+        f"{job.status}"
+    )
+    # Pre-fix this was a non-empty artifact list with synthetic outputs.
+    assert job.artifacts == [], (
+        "capture jobs should land with no artifacts; the worker writes them"
+    )
+    assert job.frames_total == 6
+    # The .captured marker tells the SLAM ingest step to skip ffmpeg.
+    assert (session.frames_dir / ".captured").exists()
+
+
+@pytest.mark.asyncio
+async def test_capture_session_zero_frames_returns_failure(tmp_data_dir):
+    """If the WS bounced before any frames decoded, the session must
+    surface a fail rather than queuing a job that's guaranteed to error
+    with `slam: no frames to track` the moment a worker claims it."""
+    from app.cloud.capture_session import CaptureSession
+
+    session = CaptureSession(session_id="test-cs-empty", backend="mast3r_slam")
+    await session.start()
+    # No push_frame calls.
+    result = await session.stop()
+    assert not result.ok
+    assert result.error is not None
+    assert "no frames" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_slam_ingest_short_circuits_on_captured_marker(tmp_data_dir):
+    """A capture-derived job has its frames pre-extracted under
+    `<job_dir>/frames/`. The SlamProcessor's ingest stage must detect
+    the `.captured` marker and skip the ffmpeg extract step instead
+    of running it against `uploads=[]` and producing zero frames."""
+    from datetime import datetime, timezone
+
+    import cv2
+
+    from app.jobs.cancel import CancelToken
+    from app.jobs.schema import Mast3rSlamConfig
+    from app.processors.base import JobContext
+    from app.processors.slam.base import SlamProcessor
+
+    job_id = "captestjob01"
+    job_dir = tmp_data_dir / "jobs" / job_id
+    frames_dir = job_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    # Drop a couple of jpegs + the marker.
+    rng = np.random.default_rng(7)
+    for i in range(4):
+        img = rng.integers(0, 255, size=(240, 320, 3), dtype=np.uint8)
+        cv2.imwrite(str(frames_dir / f"{i:06d}.jpg"), img)
+    (frames_dir / ".captured").write_text("test", encoding="utf-8")
+
+    cfg = Mast3rSlamConfig()
+    events: list = []
+
+    async def publish(event):
+        events.append(event)
+        return event
+
+    async def _noop(*_a, **_k):
+        return None
+
+    ctx = JobContext(
+        job_id=job_id,
+        uploads=[],  # Critically: no uploads. Pre-fix this would 0 out.
+        config=cfg,
+        job_dir=job_dir,
+        frames_dir=frames_dir,
+        artifacts_dir=job_dir / "artifacts",
+        cancel=CancelToken(),
+        publish=publish,
+        set_status=_noop,
+        set_frames_total=_noop,
+    )
+
+    proc = SlamProcessor.__subclasses__()
+    # Pick whichever concrete SLAM proc is available — they all share
+    # the _ingest implementation we're exercising.
+    assert proc, "no concrete SlamProcessor subclasses are importable"
+    n = await proc[0]()._ingest(ctx)
+    assert n == 4
+    # The "skipping ffmpeg ingest" event landed.
+    msgs = [e.message for e in events if hasattr(e, "message")]
+    assert any("skipping ffmpeg ingest" in m for m in msgs), msgs
+
+
+@pytest.mark.asyncio
+async def test_gsplat_resolve_inputs_accepts_jpg_frames(tmp_data_dir):
+    """Captured source jobs persist `.jpg` frames; gsplat-from-source
+    used to glob only `.png` and 409'd with "no extracted frames" even
+    though the JPEGs were sitting on disk. Pin the .jpg fallback so
+    that regression doesn't come back."""
+    from datetime import datetime, timezone
+
+    from app.jobs import store
+    from app.jobs.schema import Artifact, Job, Mast3rSlamConfig
+    from app.processors.gsplat import io as splat_io
+
+    src_id = "capjpgsource1"
+    job_dir = tmp_data_dir / "jobs" / src_id
+    (job_dir / "frames").mkdir(parents=True, exist_ok=True)
+    (job_dir / "frames" / "000000.jpg").write_bytes(b"\xff\xd8\xff")  # sentinel
+
+    artifacts_dir = job_dir / "artifacts"
+    artifacts_dir.mkdir()
+    # gsplat-from-source needs at least camera_path.json or pose_graph.json
+    # to resolve cameras + a pointcloud or splat for init.
+    (artifacts_dir / "camera_path.json").write_text("[]", encoding="utf-8")
+    (artifacts_dir / "reconstruction.ply").write_text(
+        "ply\nformat ascii 1.0\nelement vertex 0\nend_header\n",
+        encoding="utf-8",
+    )
+
+    now = datetime.now(timezone.utc)
+    job = Job(
+        id=src_id,
+        status="ready",
+        config=Mast3rSlamConfig(),
+        artifacts=[
+            Artifact(name="camera_path.json", kind="json"),
+            Artifact(name="reconstruction.ply", kind="ply"),
+        ],
+        created_at=now,
+        updated_at=now,
+    )
+    await store.init_store()
+    await store.create_job(job, worker_class="slam")
+
+    # Pre-fix: this raised GsplatInputsError. Post-fix: resolves
+    # cleanly because the .jpg frame is detected.
+    inputs = splat_io.resolve_inputs(job)
+    assert inputs.frames_dir.exists()
 
 
 def test_resolve_live_session_resolves_monogs():

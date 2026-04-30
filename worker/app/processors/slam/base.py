@@ -205,7 +205,38 @@ class SlamProcessor(Processor):
 
     async def _ingest(self, ctx: JobContext) -> int:
         """Re-use the shared ingest pipeline. Same FPV preproc stages as
-        lingbot so SLAM jobs get the full Phase-3 clean-up for free."""
+        lingbot so SLAM jobs get the full Phase-3 clean-up for free.
+
+        Capture-derived jobs short-circuit: the WS handler already
+        persisted JPEG frames straight into `<job_dir>/frames/` while
+        the user was scanning, so there's no video to ffmpeg-extract.
+        We detect this via the `.captured` marker file the capture
+        session writes on stop. Without the short-circuit a captured
+        job would re-run `concat_videos_to_frames` against `uploads=[]`
+        (empty), produce 0 frames, and the SLAM tracker would bail
+        with `slam: no frames to track` even though the captured JPEGs
+        are sitting right there on disk."""
+        captured_marker = ctx.frames_dir / ".captured"
+        if captured_marker.exists():
+            existing = sorted(ctx.frames_dir.glob("*.jpg")) + sorted(
+                ctx.frames_dir.glob("*.png")
+            )
+            frames_total = len(existing)
+            await ctx.publish(
+                JobEvent(
+                    job_id=ctx.job_id,
+                    stage="ingest",
+                    message=(
+                        f"capture-derived job: skipping ffmpeg ingest, "
+                        f"{frames_total} frames already on disk"
+                    ),
+                    data={"frames_total": frames_total, "captured": True},
+                    progress=1.0,
+                )
+            )
+            await ctx.set_frames_total(frames_total)
+            return frames_total
+
         from app.pipeline.ingest import concat_videos_to_frames
 
         await ctx.set_status("ingest")
@@ -473,8 +504,15 @@ class SlamProcessor(Processor):
 
 
 def _resolve_frame_paths(frames_dir: Path, indices: list[int]) -> list[Path]:
-    """Map a list of ingest-frame indices to the corresponding PNG paths."""
-    all_paths = sorted(frames_dir.glob("*.png"))
+    """Map a list of ingest-frame indices to the corresponding image
+    paths. Globs both `.png` (ffmpeg-extracted) and `.jpg` (capture-
+    derived) so the SLAM tracker can iterate either source uniformly.
+    The two paths never coexist in the same job dir — ingest writes
+    PNGs; the WS handler writes JPEGs — so a stable sort by name
+    yields the right ordering either way."""
+    all_paths = sorted(frames_dir.glob("*.png")) + sorted(
+        frames_dir.glob("*.jpg")
+    )
     out: list[Path] = []
     for i in indices:
         if 0 <= i < len(all_paths):
