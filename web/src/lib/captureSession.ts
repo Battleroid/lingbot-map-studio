@@ -478,6 +478,13 @@ function appendPoints(
   let off = state.pointsCount;
   const voxels = new Map(state.voxels);
   const v = state.voxelSize;
+  // Coverage buckets are now driven by *observed points*, not by
+  // poses (where the camera looked). Stripes peel back only when the
+  // SLAM tracker actually produced geometry in that direction —
+  // panning at a feature-poor wall and finding nothing leaves the
+  // stripes intact, which is the Scaniverse "real-space capture"
+  // cue the user asked for.
+  const cov = new Uint16Array(state.viewCoverage);
   for (const row of rows) {
     const x = row[0],
       y = row[1],
@@ -491,12 +498,37 @@ function appendPoints(
     off += 1;
     const key = `${Math.floor(x / v)},${Math.floor(y / v)},${Math.floor(z / v)}`;
     voxels.set(key, (voxels.get(key) ?? 0) + 1);
+    // Project the point onto the unit sphere centred at the world
+    // origin (≈ first pose's position; trajectory hasn't drifted
+    // far this early in a scan). az = atan2(x, -z) so 0° = forward,
+    // matching the shader's pixel-to-direction math; el = asin(y).
+    const len = Math.hypot(x, y, z) || 1;
+    const nx = x / len,
+      ny = y / len,
+      nz = z / len;
+    const azDeg = (Math.atan2(nx, -nz) * 180) / Math.PI;
+    const elDeg = (Math.asin(Math.max(-1, Math.min(1, ny))) * 180) / Math.PI;
+    const az = ((azDeg % 360) + 360) % 360;
+    const azIdx = Math.min(
+      VIEW_COVERAGE_AZ_BUCKETS - 1,
+      Math.floor((az / 360) * VIEW_COVERAGE_AZ_BUCKETS),
+    );
+    const elIdx = Math.min(
+      VIEW_COVERAGE_EL_BUCKETS - 1,
+      Math.max(
+        0,
+        Math.floor(((elDeg + 90) / 180) * VIEW_COVERAGE_EL_BUCKETS),
+      ),
+    );
+    const flat = elIdx * VIEW_COVERAGE_AZ_BUCKETS + azIdx;
+    if (cov[flat] < 0xffff) cov[flat] = cov[flat] + 1;
   }
   set({
     pointsXyz: xyz,
     pointsRgb: rgb,
     pointsCount: off,
     voxels,
+    viewCoverage: cov,
   });
 }
 
@@ -504,19 +536,16 @@ function appendPoints(
  *  Exposed for the UI to render `reconnecting (n/N)…`. */
 export const MAX_RECONNECT_ATTEMPTS = RECONNECT_DELAYS_MS.length;
 
-/** Update the view-direction coverage grid from a freshly-arrived
- *  pose. The pose's quaternion (xyzw) gets rotated through the
- *  camera's forward vector (-Z in three.js / OpenGL convention),
- *  the result is converted to azimuth + elevation in degrees, and
- *  the matching grid cell's count is bumped.
- *
- *  The arithmetic stays inline rather than pulling in a quaternion
- *  library: a single quaternion-times-vector op is six multiplies +
- *  five adds; bringing in three.js' Quaternion class for it would
- *  be heavier than the call site warrants. */
+/** Track the current camera-look direction as az/el bucket indices
+ *  so the (now diagnostic) cursor on the strip overlays still
+ *  follows the user's pan. Coverage *count* bumping has moved to
+ *  `appendPoints` — a bucket only flips to "covered" when the SLAM
+ *  tracker actually produced geometry there, not just because the
+ *  camera looked. The user wants stripes that reflect "was anything
+ *  observed in this direction?", not "did the camera point here?". */
 function markViewCoverageFromPose(
   pose: CapturePose,
-  get: () => CaptureState,
+  _get: () => CaptureState,
   set: (
     partial:
       | Partial<CaptureState>
@@ -524,8 +553,6 @@ function markViewCoverageFromPose(
   ) => void,
 ): void {
   const [qx, qy, qz, qw] = pose.q;
-  // Rotate the camera-forward vector (0, 0, -1) by the pose quat to
-  // get its world-space heading. Standard formula: v' = q * v * q*.
   const fx = -2 * (qx * qz + qw * qy);
   const fy = -2 * (qy * qz - qw * qx);
   const fz = -(1 - 2 * (qx * qx + qy * qy));
@@ -533,12 +560,8 @@ function markViewCoverageFromPose(
   const nx = fx / len;
   const ny = fy / len;
   const nz = fz / len;
-  // azimuth: atan2(x, -z) so 0° = forward, +x is right (clockwise
-  // when viewed from above). Elevation: asin(y).
   const azDeg = (Math.atan2(nx, -nz) * 180) / Math.PI;
   const elDeg = (Math.asin(Math.max(-1, Math.min(1, ny))) * 180) / Math.PI;
-  // Bucketize. azimuth wrapped into [0, 360); elevation clamped to
-  // [-90, 90] then mapped to [0, EL_BUCKETS).
   const az = ((azDeg % 360) + 360) % 360;
   const azIdx = Math.min(
     VIEW_COVERAGE_AZ_BUCKETS - 1,
@@ -551,14 +574,7 @@ function markViewCoverageFromPose(
       Math.floor(((elDeg + 90) / 180) * VIEW_COVERAGE_EL_BUCKETS),
     ),
   );
-  const flat = elIdx * VIEW_COVERAGE_AZ_BUCKETS + azIdx;
-  const prev = get().viewCoverage;
-  // Copy-on-write so subscribers that compare by reference re-render.
-  // 648 × Uint16 = ~1.3 KB — cheap to clone per pose.
-  const next = new Uint16Array(prev);
-  if (next[flat] < 0xffff) next[flat] = next[flat] + 1;
   set({
-    viewCoverage: next,
     viewCoverageCurrentAz: azIdx,
     viewCoverageCurrentEl: elIdx,
   });
