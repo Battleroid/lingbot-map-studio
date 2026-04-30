@@ -290,7 +290,7 @@ export function jobStreamUrl(jobId: string): string {
 
 // --- Live camera capture ----------------------------------------------
 
-export type CaptureBackend = "mast3r_slam" | "droid_slam" | "dpvo";
+export type CaptureBackend = "mast3r_slam" | "droid_slam" | "dpvo" | "monogs";
 
 export interface CaptureStartResponse {
   session_id: string;
@@ -328,6 +328,17 @@ export function captureWsUrl(sessionId: string): string {
   const u = new URL(API_BASE);
   const proto = u.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${u.host}/api/capture/${sessionId}`;
+}
+
+/** URL for the live splat-preview file the capture session writes to
+ *  disk every ~2 s. Includes a `?v=<n>` cache-buster so each
+ *  partial_splat event produces a new URL, which the SplatLayer's
+ *  effect picks up as a refetch trigger. */
+export function capturePreviewSplatUrl(
+  sessionId: string,
+  version: number,
+): string {
+  return `${API_BASE}/api/capture/${sessionId}/preview/splat.ply?v=${version}`;
 }
 
 // --- Cloud (remote execution) -----------------------------------------

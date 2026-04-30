@@ -100,6 +100,68 @@ async def test_capture_session_round_trip(tmp_data_dir):
     assert "camera_path.json" in artifact_names or "pose_graph.json" in artifact_names
 
 
+def test_resolve_live_session_resolves_monogs():
+    """MonoGS is the splat-emitting backend the capture flow points
+    users at when they want a live Gaussian Splat preview rather than
+    a sparse cloud. Pin that the resolver reaches it."""
+    from app.processors.slam.base import SlamSession
+    from app.processors.slam.live_session import (
+        SUPPORTED_BACKENDS,
+        resolve_live_session,
+    )
+
+    assert "monogs" in SUPPORTED_BACKENDS
+    s = resolve_live_session("monogs")
+    assert isinstance(s, SlamSession)
+    # The MonoGS sessions (real + simulated) both expose
+    # set_artifact_dir so the capture session can hand them a place to
+    # write splat.ply at finalize().
+    assert hasattr(s, "set_artifact_dir")
+
+
+@pytest.mark.asyncio
+async def test_capture_session_emits_splat_preview(tmp_data_dir):
+    """After enough frames, the session writes a splat.ply preview to
+    its preview dir and emits a `partial_splat` event so the capture
+    page's SplatLayer can render it. Pin the wiring so a future change
+    that drops the periodic preview is loud."""
+    from app.cloud.capture_session import (
+        CaptureSession,
+        _PREVIEW_MIN_INTERVAL_S,
+    )
+    import app.cloud.capture_session as cap_mod
+
+    # Force the throttle to ~0 so the test doesn't have to sleep
+    # 2 s for the second preview tick.
+    monkeypatched = 0.0
+    cap_mod._PREVIEW_MIN_INTERVAL_S = monkeypatched
+    try:
+        session = CaptureSession(session_id="test-cs-preview", backend="monogs")
+        await session.start()
+        rng = np.random.default_rng(2)
+        for idx in range(10):
+            img = rng.integers(0, 255, size=(240, 320, 3), dtype=np.uint8)
+            await session.push_frame(idx, img)
+            await asyncio.sleep(0.05)
+
+        deadline = asyncio.get_event_loop().time() + 4.0
+        while session._preview_count < 1 and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+
+        assert session._preview_count >= 1, "no splat preview was emitted"
+        assert (session.preview_dir / "splat.ply").exists()
+
+        # The emit_queue should carry at least one `partial_splat` msg.
+        types_seen: list[str] = []
+        while not session.emit_queue.empty():
+            types_seen.append(session.emit_queue.get_nowait().type)
+        assert "partial_splat" in types_seen, types_seen
+
+        await session.stop()
+    finally:
+        cap_mod._PREVIEW_MIN_INTERVAL_S = _PREVIEW_MIN_INTERVAL_S
+
+
 @pytest.mark.asyncio
 async def test_capture_session_drops_frames_under_backpressure(tmp_data_dir):
     """If the SLAM step rate is slower than the push rate, the

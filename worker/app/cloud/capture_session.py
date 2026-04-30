@@ -53,6 +53,11 @@ log = logging.getLogger(__name__)
 # GPU forever. Refreshed every time the client sends a frame.
 _IDLE_TIMEOUT_S = 60.0
 
+# Minimum gap between splat-preview writes. ~2 s is fast enough that
+# the user sees the splat fill out as they pan but slow enough that
+# the PLY write doesn't crowd out a SLAM step's wall-clock budget.
+_PREVIEW_MIN_INTERVAL_S = 2.0
+
 
 @dataclass
 class FramePacket:
@@ -98,12 +103,36 @@ class CaptureSession:
         self._points_buffer: list[np.ndarray] = []
         self._intrinsics: Optional[np.ndarray] = None
         self._image_shape: Optional[tuple[int, int]] = None
+        # Per-session scratch dir. Lives outside the regular `jobs/`
+        # tree because the session isn't a Job until `_finalize_to_disk`
+        # runs and promotes it. The live splat preview lands here as
+        # `splat.ply`, which the api serves at
+        # `/api/capture/{session_id}/preview/splat.ply`. MonoGS's
+        # `set_artifact_dir(...)` also targets this dir so its final
+        # splat output ends up alongside.
+        self.preview_dir: Path = settings.data_dir / "captures" / session_id / "preview"
+        self._last_preview_emit_t: float = 0.0
+        self._preview_count: int = 0
 
     async def start(self) -> None:
         """Pick the SLAM backend + spawn the frame-processing task."""
         from app.processors.slam.live_session import resolve_live_session
 
         self._slam_session = resolve_live_session(self.backend)
+        # MonoGS (and any future splat-emitting SLAM backend) writes a
+        # final splat.ply at finalize() time. Hand it our preview_dir
+        # so the file lands somewhere the finalize-to-job promotion
+        # can sweep up.
+        self.preview_dir.mkdir(parents=True, exist_ok=True)
+        if hasattr(self._slam_session, "set_artifact_dir"):
+            try:
+                self._slam_session.set_artifact_dir(self.preview_dir)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "capture_session %s: set_artifact_dir failed (%s)",
+                    self.id,
+                    exc,
+                )
         await self._emit("ready", {"backend": self.backend})
         self._task = asyncio.create_task(self._run())
 
@@ -198,6 +227,12 @@ class CaptureSession:
                 # don't redraw the chip on every step.
                 if self._frame_count <= 5 or self._frame_count % 10 == 0:
                     await self._emit_stats()
+
+                # Live splat preview — keeps the user oriented during
+                # the scan ("have I covered this corner of the room
+                # yet?"). Throttled to ~1/2 s wall-clock so writing
+                # the PLY doesn't compete with SLAM step time.
+                await self._maybe_emit_splat_preview()
         except Exception as exc:  # noqa: BLE001
             log.warning("capture_session %s loop raised: %s", self.id, exc)
             await self._emit("error", {"message": str(exc)})
@@ -237,6 +272,68 @@ class CaptureSession:
                 "frames": self._frame_count,
                 "queued": self.frame_queue.qsize(),
                 "dropped": self._dropped,
+            },
+        )
+
+    async def _maybe_emit_splat_preview(self) -> None:
+        """Periodically dump the current sparse cloud as a minimal
+        Gaussian-splat-flavoured PLY so the capture page can render it
+        as a growing splat preview instead of (or alongside) the raw
+        point cloud.
+
+        Throttled to one write per `_PREVIEW_MIN_INTERVAL_S` wall-clock
+        seconds. The write is in a thread because numpy concat + file
+        write blocks the event loop otherwise, and a phone scan can
+        accumulate tens of thousands of points pretty quickly.
+
+        The splat snapshot is the same minimal-property layout MonoGS
+        produces (xyz + log-scale + opacity + uchar RGB) so the
+        existing `SplatLayer` parser handles it without a code path
+        per-source. When MonoGS later finalizes its real splat the
+        finalize-to-disk step copies the higher-fidelity file over
+        the top so the captured *job* has the proper output."""
+        now = time.monotonic()
+        if now - self._last_preview_emit_t < _PREVIEW_MIN_INTERVAL_S:
+            return
+        if not self._points_buffer:
+            return
+        self._last_preview_emit_t = now
+        # Inline copy of the points so the writer thread doesn't race
+        # against further appends from `_run`.
+        snapshot = list(self._points_buffer)
+
+        def _write() -> int:
+            from app.processors.gsplat.monogs import _write_minimal_splat_ply
+
+            try:
+                points = np.concatenate(snapshot, axis=0)
+            except ValueError:
+                return 0
+            if points.size == 0:
+                return 0
+            self.preview_dir.mkdir(parents=True, exist_ok=True)
+            _write_minimal_splat_ply(self.preview_dir / "splat.ply", points)
+            return int(points.shape[0])
+
+        try:
+            n_pts = await asyncio.to_thread(_write)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "capture_session %s: splat preview write failed (%s)",
+                self.id,
+                exc,
+            )
+            return
+        if n_pts == 0:
+            return
+        self._preview_count += 1
+        await self._emit(
+            "partial_splat",
+            {
+                "name": "splat.ply",
+                "kind": "partial_splat",
+                "preview": self._preview_count,
+                "n_points": n_pts,
             },
         )
 
@@ -296,6 +393,43 @@ class CaptureSession:
             p = artifacts_dir / name
             if p.exists():
                 artifacts.append(Artifact(name=name, kind="ply" if name.endswith(".ply") else "json"))
+
+        # MonoGS (and the simulated MonoGS placeholder) emit a real
+        # splat.ply at finalize-time via `result.splat_ply_path`. Move
+        # it into the captured job's artifacts dir as `splat.ply` so
+        # the splat tool panel + viewer recognise it the same way they
+        # do a batch MonoGS run. Falls back to copying the live preview
+        # snapshot when the session didn't produce a finalize-time
+        # splat (e.g. a pure SLAM backend) — the user still gets a
+        # splat artifact built from the captured cloud.
+        import shutil
+
+        splat_src = getattr(result, "splat_ply_path", None)
+        if splat_src is None:
+            preview_splat = self.preview_dir / "splat.ply"
+            if preview_splat.exists():
+                splat_src = preview_splat
+        if splat_src is not None and Path(splat_src).exists():
+            splat_dst = artifacts_dir / "splat.ply"
+            try:
+                shutil.copy2(splat_src, splat_dst)
+                artifacts.append(
+                    Artifact(name=splat_dst.name, kind="splat_ply")
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "capture_session %s: failed to carry splat into job (%s)",
+                    self.id,
+                    exc,
+                )
+
+        # The preview dir has served its purpose — the active session
+        # is wrapping up. Best-effort cleanup so /data doesn't grow
+        # forever from abandoned scratch dirs.
+        try:
+            shutil.rmtree(self.preview_dir.parent, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
 
         # The captured config is shaped like a MASt3R-SLAM run —
         # picking it as the default lets the JobList / viewer code
