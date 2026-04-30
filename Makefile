@@ -126,8 +126,19 @@ up-https: .env caddy/certs/cert.pem ## start with HTTPS via Caddy + mkcert (one-
 	@# are preserved (no `-v`) so the sqlite db, models cache, and
 	@# uploaded clips survive.
 	-$(COMPOSE) --profile https down --remove-orphans 2>/dev/null
-	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile build build base
-	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https build web caddy
+	@# Build base FIRST + then *every* service that FROMs it.
+	@# Previously this only rebuilt `web caddy`, leaving api +
+	@# worker-{lingbot,slam,gs} still pointing at whatever cached
+	@# image they had from a prior `make up`. So a base-image change
+	@# (e.g. installing opencv-python-headless) didn't propagate into
+	@# the api container — it kept booting off the old base, missing
+	@# the new pip deps, and the live-capture path silently failed
+	@# with `frame decode failed: No module named 'cv2'`. Activating
+	@# both `--profile build` (the base service) and `--profile https`
+	@# (caddy) on the same `build` invocation rebuilds the whole
+	@# tree in one shot. Docker layer caching keeps it fast for
+	@# unchanged services.
+	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile build --profile https build
 	@$(MAKE) -s up-https-summary
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https up --remove-orphans
 
