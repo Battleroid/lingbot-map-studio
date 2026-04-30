@@ -103,19 +103,29 @@ up-build: .env ## build images from source + start (slow first run)
 # IP). The bootstrap re-runs automatically when scripts/mkcert-bootstrap.sh
 # is edited.
 up-https: .env caddy/certs/cert.pem ## start with HTTPS via Caddy + mkcert (one-shot, no prep)
-	@# Clean out any orphan containers / stale network refs from a
-	@# previous run before building. Without this, switching between
-	@# `make up` and `make up-https` (or interrupting a previous
-	@# up-https mid-flight) leaves containers still pointing at a
-	@# network ID Docker has since GC'd, which surfaces as
-	@# `failed to set up container networking: network <hash> not found`.
-	@# `down` without `--profile` tears down every container in the
-	@# project regardless of which profile started it; the
-	@# `--remove-orphans` belt-and-suspenders catches services that
-	@# left the compose file (or moved between profiles) since the
-	@# last run. Volumes are preserved (no `-v`) so the sqlite db,
-	@# models cache, and uploaded clips survive.
-	-$(COMPOSE) down --remove-orphans 2>/dev/null
+	@# Clean out stale containers / network refs from a previous run
+	@# before building. Specifically targets the case the user reports:
+	@# `make up-https` errors with
+	@#   failed to set up container networking: network <hash> not found
+	@# caused by an Exited caddy container whose config baked in a
+	@# Network ID that no longer exists. That happens because caddy is
+	@# profile-gated (`profiles: [https]`): a Ctrl-C out of a previous
+	@# up-https leaves it Exited; a subsequent `make up` (no profile)
+	@# recreates `<project>_default` with a new ID for api/web/workers
+	@# but doesn't touch the inactive caddy; next up-https tries to
+	@# start the same caddy container, looks up its old NetworkID,
+	@# and the daemon refuses.
+	@#
+	@# Down with `--profile https` so caddy IS in scope of the
+	@# teardown — without the profile flag, compose v2 treats
+	@# profile-gated services as out-of-scope and won't remove their
+	@# containers. The `-` prefix makes the command non-fatal so a
+	@# fresh-clone first run (nothing to remove) doesn't error out.
+	@# `--remove-orphans` catches services that moved between
+	@# profiles or left the compose file since the last run. Volumes
+	@# are preserved (no `-v`) so the sqlite db, models cache, and
+	@# uploaded clips survive.
+	-$(COMPOSE) --profile https down --remove-orphans 2>/dev/null
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile build build base
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https build web caddy
 	@$(MAKE) -s up-https-summary
@@ -172,9 +182,17 @@ up-https-summary:
 	    qrencode -t ANSI256 -m 1 "$$CAP_URL"; \
 	  fi; \
 	  echo "     and tap allow when the camera prompt appears."; \
+	  echo; \
+	  echo "  ─ from the studio host itself (this machine):"; \
+	  echo "       https://localhost/capture"; \
+	  echo "     Some Linux + Docker setups can't loop a host-originated"; \
+	  echo "     request through to its own published LAN IP, so the LAN"; \
+	  echo "     URL above sometimes only works from other devices.   "; \
+	  echo "     localhost is covered by the cert + always reachable."; \
 	else \
 	  echo "  visit http://<host-lan-ip>/mkcert-rootCA.crt to trust the CA,"; \
-	  echo "  then https://<host-lan-ip>/capture"; \
+	  echo "  then https://<host-lan-ip>/capture (or https://localhost/capture"; \
+	  echo "  from the host machine itself)"; \
 	fi
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo
