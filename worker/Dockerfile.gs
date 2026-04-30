@@ -69,7 +69,17 @@ RUN pip install --no-cache-dir \
         "wandb==0.17.7" \
         "evo==1.28.0" \
         "matplotlib==3.9.2" \
-        "open3d==0.18.0"
+        "open3d==0.18.0" \
+        "torchmetrics==1.4.0.post0"
+        # ^ torchmetrics is imported eagerly by `utils/eval_utils.py:15`
+        # (`from torchmetrics.image.lpip import
+        # LearnedPerceptualImagePatchSimilarity`). `slam.py` imports
+        # `eval_utils` at module top, so a missing torchmetrics is a
+        # hard ModuleNotFoundError seven lines into the post-stop
+        # subprocess — even though we run with `eval_rendering: False`
+        # and never reach the LPIPS code path. Pin to 1.4.0.post0 — the
+        # last release in the 1.4.x series that still works against
+        # torch 2.3.1; 1.5+ requires torch>=2.4.
         # ^ open3d is the next missing-import we hit after wandb;
         # MonoGS imports it eagerly during scene construction even
         # when the user isn't running a viewer that needs it. ~500 MB

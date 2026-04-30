@@ -65,7 +65,13 @@ RUN pip install --no-cache-dir \
         "wandb==0.17.7" \
         "evo==1.28.0" \
         "matplotlib==3.9.2" \
-        "open3d==0.18.0"
+        "open3d==0.18.0" \
+        "torchmetrics==1.4.0.post0"
+        # ^ torchmetrics — same reason as Dockerfile.gs: MonoGS's
+        # `utils/eval_utils.py` imports it eagerly at module top
+        # via `from torchmetrics.image.lpip import
+        # LearnedPerceptualImagePatchSimilarity`. Keep the two
+        # MonoGS dep blocks in lockstep.
 
 # Build deps for MonoGS's CUDA submodule compiles.
 RUN apt-get update && apt-get install -y --no-install-recommends \
