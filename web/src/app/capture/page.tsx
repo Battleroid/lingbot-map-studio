@@ -12,7 +12,7 @@ import {
 } from "react";
 import * as THREE from "three";
 
-import { CameraOverlayAR } from "@/components/capture/CameraOverlayAR";
+import { CameraOverlayMask } from "@/components/capture/CameraOverlayMask";
 import { CameraStream } from "@/components/capture/CameraStream";
 import {
   CoverageVoxels,
@@ -45,6 +45,21 @@ const CAPTURE_BUTTON_STYLE: CSSProperties = {
   border: "1px solid #fff",
   borderRadius: 6,
   fontWeight: 600,
+};
+
+/** Shared style for the small dark-on-translucent buttons that ride
+ *  in the PiP corner (follow/orbit toggle, collapse handle). Tap
+ *  target intentionally tiny — these are non-primary controls; the
+ *  big primary button is the start/stop CTA at the bottom. */
+const pipCornerButtonStyle: CSSProperties = {
+  padding: "2px 6px",
+  background: "rgba(10, 10, 10, 0.78)",
+  color: "#fff",
+  border: "1px solid rgba(255, 255, 255, 0.4)",
+  borderRadius: 3,
+  fontSize: "10px",
+  letterSpacing: "0.04em",
+  minHeight: 24,
 };
 
 /**
@@ -114,6 +129,14 @@ function CapturePageInner() {
   // in the splat space; `orbit` is free OrbitControls navigation
   // (the previous default). Toggle is a tiny button on the PiP.
   const [pipMode, setPipMode] = useState<"follow" | "orbit">("follow");
+  // Collapse the PiP entirely when the user wants the camera view
+  // unobstructed. Default to "expanded" so the at-a-glance scene
+  // overview is visible during a typical scan; the Scaniverse-style
+  // coverage mask on the camera view itself doesn't need the PiP
+  // to convey what's been captured, but the PiP still shows pose +
+  // sparse points + voxels in 3D which is useful as a debug view
+  // and for orienting yourself between passes.
+  const [pipCollapsed, setPipCollapsed] = useState(false);
 
   // "open" or actively retrying — both are flavours of an in-progress
   // session, so treat them as `capturing` for the purpose of which
@@ -236,81 +259,125 @@ function CapturePageInner() {
           fps={10}
           deviceId={deviceId}
         />
-        {/* Scaniverse-style 3D coverage overlay. A transparent
-         *  three.js Canvas mounted over the video element with its
-         *  camera locked to the live SLAM pose. Captured cells render
-         *  with a world-space diagonal-stripe shader; an immediately-
-         *  adjacent shell of uncovered cells renders translucent
-         *  red. As the user pans into the red regions the SLAM
-         *  tracker fills the bins and they flip to stripes — same
-         *  panning-feedback loop as Scaniverse. Replaces the prior
-         *  compass-strip approximation, which surfaced direction
-         *  coverage as 1D bars and didn't carry the spatial cue. */}
-        {capturing && <CameraOverlayAR />}
+        {/* Scaniverse-style coverage mask. Screen-space candy-stripe
+         *  over screen regions whose view direction the SLAM tracker
+         *  hasn't observed yet; the camera feed shows through where
+         *  the user has already pointed. Driven entirely by the az/el
+         *  coverage map maintained in the captureSession store —
+         *  no depth or world-space projection required. As you pan
+         *  into striped regions the stripes peel back; before any
+         *  pose has landed the whole screen is striped (matches
+         *  Scaniverse's "Move around the subject" intro state). */}
+        {capturing && <CameraOverlayMask />}
       </div>
 
       {/* Coverage canvas. PiP on portrait (top-left, 35% × 35%);
-          right-half pane on landscape. */}
-      <div className="capture-canvas-pane">
-        <Canvas
-          camera={{ position: [2, 2, 2], fov: 45, near: 0.001, far: 1000 }}
-          style={{ background: "#0a0a0a" }}
-        >
-          <ambientLight intensity={0.7} />
-          <directionalLight position={[3, 5, 2]} intensity={0.6} />
-          {pipMode === "follow" ? (
-            // Follow mode skips Bounds (which would auto-fit the
-            // view to scene contents and override our pose-driven
-            // camera every render). FollowPoseCamera writes
-            // position+quaternion straight from the latest pose.
-            <>
-              <CoverageVoxels />
-              <CapturePointCloud />
-              <CaptureFrustum />
-              <FollowPoseCamera />
-            </>
-          ) : (
-            <Bounds margin={1.4} observe>
-              <CoverageVoxels />
-              <CapturePointCloud />
-              <CaptureFrustum />
-            </Bounds>
-          )}
-          <axesHelper args={[0.3]} />
-          {pipMode === "orbit" && (
-            <OrbitControls makeDefault enableDamping dampingFactor={0.08} />
-          )}
-        </Canvas>
-        {/* PiP-corner toggle. Stays small + dark so it doesn't hide
-         *  the canvas content; tap target is 32px which is fine for
-         *  a non-primary control. */}
-        <button
-          type="button"
-          onClick={() =>
-            setPipMode((m) => (m === "follow" ? "orbit" : "follow"))
-          }
-          style={{
-            position: "absolute",
-            top: 4,
-            right: 4,
-            padding: "2px 6px",
-            background: "rgba(10, 10, 10, 0.78)",
-            color: "#fff",
-            border: "1px solid rgba(255, 255, 255, 0.4)",
-            borderRadius: 3,
-            fontSize: "10px",
-            letterSpacing: "0.04em",
-            minHeight: 24,
-          }}
-          aria-pressed={pipMode === "follow"}
-          title={
-            pipMode === "follow"
-              ? "PiP follows your phone's orientation; tap to orbit freely"
-              : "PiP is free-orbit; tap to follow the live pose"
-          }
-        >
-          {pipMode === "follow" ? "follow ●" : "orbit ○"}
-        </button>
+       *  right-half pane on landscape. Collapsible: a tap on the
+       *  top-right corner button hides the whole PiP and replaces it
+       *  with a tiny expand-handle, so the user can get the camera
+       *  view unobstructed without losing the option to pull the PiP
+       *  back. The Scaniverse-style mask on the camera view itself
+       *  conveys captured/uncaptured separately, so the PiP is
+       *  optional information rather than the primary cue. */}
+      <div
+        className={`capture-canvas-pane${
+          pipCollapsed ? " capture-canvas-pane--collapsed" : ""
+        }`}
+      >
+        {pipCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setPipCollapsed(false)}
+            style={{
+              width: "100%",
+              height: "100%",
+              padding: 0,
+              background: "rgba(10, 10, 10, 0.6)",
+              color: "#fff",
+              border: "1px solid rgba(255, 255, 255, 0.4)",
+              borderRadius: "var(--r-xs)",
+              fontSize: 18,
+              cursor: "pointer",
+            }}
+            aria-label="expand PiP scene preview"
+            title="expand PiP scene preview"
+          >
+            ▣
+          </button>
+        ) : (
+          <>
+            <Canvas
+              camera={{ position: [2, 2, 2], fov: 45, near: 0.001, far: 1000 }}
+              style={{ background: "#0a0a0a" }}
+            >
+              <ambientLight intensity={0.7} />
+              <directionalLight position={[3, 5, 2]} intensity={0.6} />
+              {pipMode === "follow" ? (
+                // Follow mode skips Bounds (which would auto-fit the
+                // view to scene contents and override our pose-driven
+                // camera every render). FollowPoseCamera writes
+                // position+quaternion straight from the latest pose.
+                <>
+                  <CoverageVoxels />
+                  <CapturePointCloud />
+                  <CaptureFrustum />
+                  <FollowPoseCamera />
+                </>
+              ) : (
+                <Bounds margin={1.4} observe>
+                  <CoverageVoxels />
+                  <CapturePointCloud />
+                  <CaptureFrustum />
+                </Bounds>
+              )}
+              <axesHelper args={[0.3]} />
+              {pipMode === "orbit" && (
+                <OrbitControls
+                  makeDefault
+                  enableDamping
+                  dampingFactor={0.08}
+                />
+              )}
+            </Canvas>
+            {/* PiP-corner controls: collapse + follow/orbit toggle.
+             *  Both stay small + dark so they don't hide the canvas
+             *  content. */}
+            <div
+              style={{
+                position: "absolute",
+                top: 4,
+                right: 4,
+                display: "flex",
+                gap: 4,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setPipMode((m) => (m === "follow" ? "orbit" : "follow"))
+                }
+                style={pipCornerButtonStyle}
+                aria-pressed={pipMode === "follow"}
+                title={
+                  pipMode === "follow"
+                    ? "PiP follows your phone's orientation; tap to orbit freely"
+                    : "PiP is free-orbit; tap to follow the live pose"
+                }
+              >
+                {pipMode === "follow" ? "follow ●" : "orbit ○"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPipCollapsed(true)}
+                style={pipCornerButtonStyle}
+                aria-label="collapse PiP scene preview"
+                title="collapse PiP"
+              >
+                ▢
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Stats + controls overlay.
@@ -580,6 +647,17 @@ function CapturePageInner() {
           overflow: hidden;
           box-shadow: 0 0 0 2px rgba(10, 10, 10, 0.4);
         }
+        /* Collapsed: shrink to a 36×36 button that sits in the same
+         * top-left corner. The expand-button rendered inside fills
+         * the pane so the user has a generous tap target even at
+         * the small size. */
+        .capture-canvas-pane.capture-canvas-pane--collapsed {
+          width: 36px;
+          height: 36px;
+          max-width: 36px;
+          max-height: 36px;
+          box-shadow: none;
+        }
         @media (min-width: 900px) {
           /* landscape: video left half, canvas right half */
           .capture-video-pane {
@@ -596,6 +674,19 @@ function CapturePageInner() {
             border-left: 1px solid rgba(255, 255, 255, 0.4);
             border-radius: 0;
             box-shadow: none;
+          }
+          /* Landscape collapsed: keep the wide-mode left-edge anchor
+           * but tuck the pane back into a corner button so the
+           * left-half camera view recovers the screen real estate. */
+          .capture-canvas-pane.capture-canvas-pane--collapsed {
+            top: 12px;
+            left: auto;
+            right: 12px;
+            width: 36px;
+            height: 36px;
+            max-width: 36px;
+            max-height: 36px;
+            border-left: none;
           }
         }
       `}</style>
