@@ -10,6 +10,9 @@
 #   make up           — pull GHCR images + start (default; foreground)
 #   make up-d         — same, but daemonized
 #   make up-build     — build images from source + start (slow first run)
+#   make build        — rebuild every container image (no `up`); chainable:
+#                       `make build up-https` does a clean rebuild then
+#                       starts the https stack
 #   make up-https     — start with HTTPS via Caddy + mkcert (one-shot,
 #                       phone /capture). Auto-bootstraps mkcert + certs.
 #   make https-certs  — regenerate the mkcert cert pair on demand
@@ -30,8 +33,8 @@
 COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PREBUILT := -f docker-compose.yml -f docker-compose.prebuilt.yml
 
-.PHONY: help doctor up up-d up-build up-https up-https-summary https-certs pull down \
-        logs ps restart clean shell-api shell-lingbot shell-slam shell-gs
+.PHONY: help doctor up up-d up-build build up-https up-https-summary https-certs \
+        pull down logs ps restart clean shell-api shell-lingbot shell-slam shell-gs
 
 help:
 	@awk 'BEGIN{FS=":.*##"; printf "vid3d studio targets:\n"} \
@@ -77,6 +80,15 @@ up-d: .env ## same as up, but daemonized
 up-build: .env ## build images from source + start (slow first run)
 	$(COMPOSE) --profile build build
 	$(COMPOSE) up
+
+# Build-only target — chainable. `make build up-https` rebuilds every
+# image cleanly then hands off to up-https for the start phase, no
+# stale-base-cache surprises. Activates every profile so the build
+# touches base + api + workers + web + caddy + minio. Layer caching
+# keeps unchanged services fast; the only real cost is whatever
+# actually needs rebuilding.
+build: .env ## (re)build every container image
+	$(COMPOSE) --profile build --profile https --profile cloud-storage build
 
 # HTTPS via Caddy + a mkcert-issued cert. Required for `getUserMedia`
 # (and thus the /capture page) to work from a phone — mobile browsers
