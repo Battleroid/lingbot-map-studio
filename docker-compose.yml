@@ -169,9 +169,17 @@ services:
     build:
       context: ./web
       args:
-        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+        # Single-dash substitution: the default kicks in only when the var
+        # is *unset*. An explicit empty value (`NEXT_PUBLIC_API_BASE=`) is
+        # passed through as empty, which is what `make up-https` relies
+        # on so api.ts's runtime fallback to `window.location.origin`
+        # fires. The previous `:-` form treated empty *and* unset
+        # identically, baking the localhost url into the bundle even
+        # under https — which mixed-content-blocked phones with a
+        # NetworkError on capture-start.
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE-http://localhost:8000}
     environment:
-      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE-http://localhost:8000}
     ports:
       - "3000:3000"
     depends_on:

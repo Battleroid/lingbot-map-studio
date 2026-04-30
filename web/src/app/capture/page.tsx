@@ -149,7 +149,16 @@ export default function CapturePage() {
       style={{
         position: "relative",
         width: "100%",
-        height: "100vh",
+        // 100dvh tracks the *currently visible* viewport. Mobile
+        // browsers expose less than 100vh while the URL bar / bottom
+        // chrome is showing, so a 100vh shell with bottom-anchored
+        // controls would push the start button off-screen on first
+        // load. dvh resolves to the dynamic value and swaps cleanly
+        // when the user scrolls and the chrome retracts.
+        height: "100dvh",
+        // Honour the home-indicator inset on iOS so the controls
+        // anchor above it instead of under it.
+        paddingBottom: "env(safe-area-inset-bottom)",
         background: "#000",
         color: "#fff",
         overflow: "hidden",
@@ -262,12 +271,19 @@ export default function CapturePage() {
       <div
         style={{
           position: "absolute",
-          bottom: 24,
+          // Anchor above the iOS home indicator + a 24px breathing
+          // gap. `max()` keeps a sensible minimum on phones with no
+          // inset (Android, desktop), where env(...) resolves to 0.
+          bottom: "max(24px, calc(env(safe-area-inset-bottom) + 24px))",
           left: 0,
           right: 0,
           display: "flex",
           justifyContent: "center",
           gap: 12,
+          // Bump tap target on mobile — the previous "8px 20px" button
+          // was a 32px-tall pill, well below Apple's 44pt / Material's
+          // 48dp accessibility guidance for primary actions.
+          padding: "0 16px",
         }}
       >
         {!capturing ? (
@@ -275,7 +291,11 @@ export default function CapturePage() {
             type="button"
             onClick={start}
             disabled={busy !== null}
-            style={{ padding: "8px 20px", fontSize: "var(--fs-md)" }}
+            style={{
+              padding: "12px 24px",
+              fontSize: "var(--fs-md)",
+              minHeight: 48,
+            }}
           >
             {busy === "start" ? "starting…" : "start capture"}
           </button>
@@ -284,7 +304,11 @@ export default function CapturePage() {
             type="button"
             onClick={stop}
             disabled={busy !== null}
-            style={{ padding: "8px 20px", fontSize: "var(--fs-md)" }}
+            style={{
+              padding: "12px 24px",
+              fontSize: "var(--fs-md)",
+              minHeight: 48,
+            }}
           >
             {busy === "stop" ? "finalizing…" : "stop + open job"}
           </button>
@@ -295,7 +319,9 @@ export default function CapturePage() {
         <div
           style={{
             position: "absolute",
-            bottom: 80,
+            // Sit just above the controls, scaled the same way so
+            // both move together when the safe-area inset is non-zero.
+            bottom: "max(88px, calc(env(safe-area-inset-bottom) + 88px))",
             left: 12,
             right: 12,
             padding: "6px 10px",
@@ -341,7 +367,7 @@ export default function CapturePage() {
             top: 0;
             left: 50%;
             width: 50%;
-            height: 100vh;
+            height: 100dvh;
             max-width: none;
             max-height: none;
             border: none;

@@ -17,12 +17,26 @@
 # too.
 
 # Plain HTTP block — its only jobs are:
-#   1. serve /mkcert-rootCA.pem so the phone can download the root CA
-#      before it trusts anything HTTPS.
+#   1. serve the root CA so the phone can download + trust it before
+#      it'll accept the studio's HTTPS cert. We expose it at both
+#      `.crt` and `.pem` paths because Android's "Install a certificate
+#      → CA certificate" picker filters its file browser by extension
+#      and won't show `.pem` files at all — same byte content, but the
+#      picker hides them. The `.crt` URL also sets the
+#      `application/x-x509-ca-cert` MIME type so Android prompts to
+#      install on tap instead of dropping the file in Downloads.
 #   2. redirect every other request to HTTPS.
 :80 {
-	@rootca path /mkcert-rootCA.pem
-	handle @rootca {
+	@rootca_crt path /mkcert-rootCA.crt
+	handle @rootca_crt {
+		header Content-Type "application/x-x509-ca-cert"
+		header Content-Disposition "attachment; filename=mkcert-rootCA.crt"
+		root * /certs
+		rewrite * /rootCA.crt
+		file_server
+	}
+	@rootca_pem path /mkcert-rootCA.pem
+	handle @rootca_pem {
 		root * /certs
 		rewrite * /rootCA.pem
 		file_server

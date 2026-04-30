@@ -155,6 +155,15 @@ copy_root_ca() {
     fi
     cp "$caroot/rootCA.pem" "$CERTS_DIR/rootCA.pem"
     chmod 644 "$CERTS_DIR/rootCA.pem"
+    # Also expose the same root CA at a `.crt` path. Android's
+    # "Install a certificate → CA certificate" picker filters its file
+    # browser by extension and hides anything that isn't `.crt` /
+    # `.cer` / `.pkcs12`, so a plain `.pem` won't show up — even
+    # though the file format is byte-for-byte the same. Caddy serves
+    # the .crt URL with `Content-Type: application/x-x509-ca-cert`
+    # which is what Android's install-on-tap path expects.
+    cp "$caroot/rootCA.pem" "$CERTS_DIR/rootCA.crt"
+    chmod 644 "$CERTS_DIR/rootCA.crt"
 }
 
 # ── main ───────────────────────────────────────────────────────────

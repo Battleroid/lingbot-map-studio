@@ -130,20 +130,20 @@ up-https-summary:
 	@if [ -f caddy/certs/.env.bootstrap ]; then \
 	  . caddy/certs/.env.bootstrap; \
 	  if [ -n "$$STUDIO_LAN_IP" ]; then \
-	    echo "  1. trust the local CA — visit"; \
-	    echo "       http://$$STUDIO_LAN_IP/mkcert-rootCA.pem"; \
-	    echo "     and install the file (Android: Settings → Security →"; \
-	    echo "     Install certificate → CA. iOS: General → VPN & Device"; \
-	    echo "     Mgmt + Certificate Trust Settings)."; \
+	    echo "  1. trust the local CA — on Android, tap"; \
+	    echo "       http://$$STUDIO_LAN_IP/mkcert-rootCA.crt"; \
+	    echo "     The phone should prompt to install (Settings may ask"; \
+	    echo "     for the device PIN). On iOS: same URL, then General →"; \
+	    echo "     VPN & Device Mgmt + Certificate Trust Settings."; \
 	    echo; \
 	    echo "  2. open https://$$STUDIO_LAN_IP/capture and tap allow"; \
 	    echo "     when the camera prompt appears."; \
 	  else \
-	    echo "  1. http://$$STUDIO_HOSTNAME/mkcert-rootCA.pem  (trust the CA)"; \
+	    echo "  1. http://$$STUDIO_HOSTNAME/mkcert-rootCA.crt  (trust the CA)"; \
 	    echo "  2. https://$$STUDIO_HOSTNAME/capture            (camera)"; \
 	  fi; \
 	else \
-	  echo "  visit http://<host-lan-ip>/mkcert-rootCA.pem to trust the CA,"; \
+	  echo "  visit http://<host-lan-ip>/mkcert-rootCA.crt to trust the CA,"; \
 	  echo "  then https://<host-lan-ip>/capture"; \
 	fi
 	@echo "════════════════════════════════════════════════════════════════"
