@@ -71,18 +71,24 @@ WebSocket) plus the Next.js frontend over a single hostname. Default
 When the stack comes up it prints two URLs you visit from the phone,
 in order:
 
-1. **`http://<host-lan-ip>/mkcert-rootCA.pem`** — Caddy serves the
+1. **`http://<host-lan-ip>/mkcert-rootCA.crt`** — Caddy serves the
    freshly-generated root CA over plain HTTP on port 80 (the only
    thing on the HTTP block; everything else 301s to HTTPS). Tap the
-   link, the phone downloads the `.pem`, then install it:
-   - **Android**: Settings → Security → Encryption & credentials →
-     Install a certificate → **CA certificate** → pick the file.
-     Confirm "Install anyway".
-   - **iOS**: open the file from the Files app → Settings prompts
-     "Profile downloaded" → General → VPN & Device Management →
-     install. Then General → About → **Certificate Trust Settings**
-     → toggle the mkcert root to fully trust it (Apple gates
-     user-installed CAs behind this extra step on purpose).
+   link from the phone's browser; the response sets
+   `Content-Type: application/x-x509-ca-cert` so the OS treats it as
+   an install candidate rather than a download.
+   - **Android**: tapping the link prompts directly to install (the
+     phone may ask for your device PIN first). If your browser drops
+     it into Downloads instead, open Settings → Security →
+     Encryption & credentials → Install a certificate →
+     **CA certificate** and pick `mkcert-rootCA.crt`. The same
+     cert is served at the `.pem` path too, but Android's CA picker
+     hides `.pem` files — that's why we expose the `.crt` URL.
+   - **iOS**: same URL — Safari prompts "Profile downloaded" →
+     General → VPN & Device Management → install. Then General →
+     About → **Certificate Trust Settings** → toggle the mkcert root
+     to fully trust it (Apple gates user-installed CAs behind this
+     extra step on purpose).
 
 2. **`https://<host-lan-ip>/capture`** — the capture page itself.
    With the CA trusted from step 1 the browser accepts the cert
