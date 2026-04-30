@@ -3,7 +3,7 @@
 import { Canvas } from "@react-three/fiber";
 import { Bounds, OrbitControls } from "@react-three/drei";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import * as THREE from "three";
 
 import { CameraStream } from "@/components/capture/CameraStream";
@@ -21,6 +21,17 @@ import {
   MAX_RECONNECT_ATTEMPTS,
   useCaptureStore,
 } from "@/lib/captureSession";
+
+const CAPTURE_BUTTON_STYLE: CSSProperties = {
+  padding: "12px 24px",
+  fontSize: "var(--fs-md)",
+  minHeight: 48,
+  background: "#fff",
+  color: "#000",
+  border: "1px solid #fff",
+  borderRadius: 6,
+  fontWeight: 600,
+};
 
 /**
  * Live camera capture page.
@@ -54,6 +65,8 @@ export default function CapturePage() {
   const framesSent = useCaptureStore((s) => s.framesSent);
   const framesDroppedClient = useCaptureStore((s) => s.framesDroppedClient);
   const latestSplatPreview = useCaptureStore((s) => s.latestSplatPreview);
+  const videoReady = useCaptureStore((s) => s.videoReady);
+  const videoSize = useCaptureStore((s) => s.videoSize);
 
   // "open" or actively retrying — both are flavours of an in-progress
   // session, so treat them as `capturing` for the purpose of which
@@ -228,14 +241,35 @@ export default function CapturePage() {
           fontSize: "var(--fs-xs)",
           letterSpacing: "0.04em",
           borderRadius: "var(--r-xs)",
+          maxWidth: "calc(100vw - 24px)",
         }}
       >
-        ●&nbsp;{pointsCount.toLocaleString()} pts &middot;{" "}
-        {Math.round(summary.ratio * 100)}% covered &middot;{" "}
-        sent {framesSent}
-        {framesDroppedClient > 0 && ` (${framesDroppedClient} dropped)`} ·
-        processed {stats.frames}
-        {stats.dropped > 0 && ` (${stats.dropped} dropped)`}
+        <div>
+          ●&nbsp;{pointsCount.toLocaleString()} pts &middot;{" "}
+          {Math.round(summary.ratio * 100)}% covered
+        </div>
+        {/* Three-tier diagnostic: video → ws → frames. A stuck capture
+         *  has *one* of these stuck, so showing them all together
+         *  makes the failure mode obvious from the phone:
+         *    video: ✗ → camera permission denied / not playing
+         *    ws: closed → caddy / cert / network issue
+         *    sent 0 with ws open → client backpressure dropping frames
+         *    sent N processed 0 → server can't decode
+         *    sent N processed M → working, just slow */}
+        <div style={{ opacity: 0.85 }}>
+          video:{" "}
+          {videoReady && videoSize
+            ? `${videoSize[0]}×${videoSize[1]}`
+            : videoReady
+              ? "ready"
+              : "✗"}{" "}
+          · ws: {status}
+          {reconnectAttempt > 0 ? ` (retry ${reconnectAttempt})` : ""} · sent{" "}
+          {framesSent}
+          {framesDroppedClient > 0 && ` (${framesDroppedClient} dropped)`} ·
+          processed {stats.frames}
+          {stats.dropped > 0 && ` (${stats.dropped} dropped)`}
+        </div>
       </div>
 
       {reconnecting && (
@@ -317,16 +351,20 @@ export default function CapturePage() {
           padding: "0 16px",
         }}
       >
+        {/* Explicit background + color on the buttons. The page shell
+         *  inherits color: white from the dark surround, and mobile
+         *  browsers default <button> background to a near-white, which
+         *  was rendering the start-capture button as white-on-white
+         *  (text invisible) on Android Chrome. Pinning a high-contrast
+         *  black-on-white CTA fixes the readability and side-steps any
+         *  global button styles in globals.css that don't account for
+         *  this inverted shell. */}
         {!capturing ? (
           <button
             type="button"
             onClick={start}
             disabled={busy !== null}
-            style={{
-              padding: "12px 24px",
-              fontSize: "var(--fs-md)",
-              minHeight: 48,
-            }}
+            style={CAPTURE_BUTTON_STYLE}
           >
             {busy === "start" ? "starting…" : "start capture"}
           </button>
@@ -335,11 +373,7 @@ export default function CapturePage() {
             type="button"
             onClick={stop}
             disabled={busy !== null}
-            style={{
-              padding: "12px 24px",
-              fontSize: "var(--fs-md)",
-              minHeight: 48,
-            }}
+            style={CAPTURE_BUTTON_STYLE}
           >
             {busy === "stop" ? "finalizing…" : "stop + open job"}
           </button>

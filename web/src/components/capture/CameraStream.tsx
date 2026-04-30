@@ -36,6 +36,7 @@ export function CameraStream({ capturing, fps = 10, deviceId }: Props) {
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sendFrame = useCaptureStore((s) => s.sendFrame);
+  const setVideoState = useCaptureStore((s) => s.setVideoState);
 
   // Open / close the camera. We also re-acquire when `deviceId`
   // changes so the camera-source picker takes effect immediately.
@@ -108,7 +109,17 @@ export function CameraStream({ capturing, fps = 10, deviceId }: Props) {
     let ctx: CanvasRenderingContext2D | null = null;
 
     const id = window.setInterval(() => {
-      if (v.readyState < 2 || v.videoWidth === 0) return;
+      const ready = v.readyState >= 2 && v.videoWidth > 0;
+      // Push readiness + resolution into the store every tick so the
+      // capture page chip can show "video: 1280×720 · ws: open · sent
+      // N · processed M". A stuck capture has one of these stuck at
+      // 0 / false; surfacing all three makes the failure mode obvious
+      // from the phone instead of needing to ssh into the studio.
+      setVideoState(
+        ready,
+        ready ? [v.videoWidth, v.videoHeight] : null,
+      );
+      if (!ready) return;
       if (!canvas) {
         canvas = document.createElement("canvas");
         canvas.width = v.videoWidth;
@@ -134,7 +145,7 @@ export function CameraStream({ capturing, fps = 10, deviceId }: Props) {
       );
     }, intervalMs);
     return () => window.clearInterval(id);
-  }, [capturing, fps, sendFrame]);
+  }, [capturing, fps, sendFrame, setVideoState]);
 
   return (
     <>

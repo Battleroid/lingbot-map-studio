@@ -72,6 +72,14 @@ interface CaptureState {
   // sees a fresh dependency and re-fetches.
   latestSplatPreview: string | null;
 
+  // Local view of the camera element's readiness. Pushed in by
+  // `CameraStream` on each frame-grab tick. Surfaced on the chip so
+  // "phone not sending" can be diagnosed as either "video element
+  // never reached HAVE_CURRENT_DATA" (videoReady=false) or "WS won't
+  // accept the frame" (sent=0 with videoReady=true).
+  videoReady: boolean;
+  videoSize: [number, number] | null;
+
   // Reconnect bookkeeping. `reconnectAttempt` is 0 while connected /
   // idle and >0 while a retry is scheduled or in flight (used in the
   // UI to show "reconnecting…" copy + a counter). `reconnectTimer`
@@ -88,6 +96,7 @@ interface CaptureState {
   reset: () => void;
   setVoxelSize: (size: number) => void;
   sendFrame: (blob: Blob) => void;
+  setVideoState: (ready: boolean, size: [number, number] | null) => void;
 }
 
 const INITIAL_POINT_CAPACITY = 4096;
@@ -117,6 +126,8 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   framesSent: 0,
   framesDroppedClient: 0,
   latestSplatPreview: null,
+  videoReady: false,
+  videoSize: null,
   reconnectAttempt: 0,
   reconnectTimer: null,
   userInitiatedClose: false,
@@ -173,6 +184,8 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       framesSent: 0,
       framesDroppedClient: 0,
       latestSplatPreview: null,
+      videoReady: false,
+      videoSize: null,
       reconnectAttempt: 0,
       reconnectTimer: null,
       userInitiatedClose: false,
@@ -213,6 +226,20 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
         /* drop on disconnect */
       }
     });
+  },
+
+  setVideoState: (ready: boolean, size: [number, number] | null) => {
+    // Only write through when something actually changed — guards
+    // against a per-tick `setState` no-op storm from the camera
+    // grab loop.
+    const cur = get();
+    const sizeChanged =
+      (cur.videoSize === null) !== (size === null) ||
+      (cur.videoSize !== null &&
+        size !== null &&
+        (cur.videoSize[0] !== size[0] || cur.videoSize[1] !== size[1]));
+    if (cur.videoReady === ready && !sizeChanged) return;
+    set({ videoReady: ready, videoSize: size });
   },
 }));
 
