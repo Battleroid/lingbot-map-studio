@@ -1,6 +1,6 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { Bounds, OrbitControls } from "@react-three/drei";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
@@ -17,7 +17,11 @@ import {
   stopCaptureSession,
   type CaptureBackend,
 } from "@/lib/api";
-import { useCaptureStore } from "@/lib/captureSession";
+import {
+  useCaptureStore,
+  VIEW_COVERAGE_AZ_BUCKETS,
+  VIEW_COVERAGE_EL_BUCKETS,
+} from "@/lib/captureSession";
 
 const CAPTURE_BUTTON_STYLE: CSSProperties = {
   padding: "12px 24px",
@@ -72,6 +76,12 @@ export default function CapturePage() {
   // stuck capture.
   const [showLog, setShowLog] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "err">("idle");
+
+  // PiP view mode: `follow` snaps the canvas camera to the latest
+  // SLAM pose so the user sees their phone's orientation reflected
+  // in the splat space; `orbit` is free OrbitControls navigation
+  // (the previous default). Toggle is a tiny button on the PiP.
+  const [pipMode, setPipMode] = useState<"follow" | "orbit">("follow");
 
   // "open" or actively retrying — both are flavours of an in-progress
   // session, so treat them as `capturing` for the purpose of which
@@ -194,6 +204,15 @@ export default function CapturePage() {
           fps={10}
           deviceId={deviceId}
         />
+        {/* Scaniverse-style coverage strips. Top: azimuth (where you
+         *  panned left-right). Side: elevation (up-down). Covered
+         *  buckets render with a black/white diagonal pattern,
+         *  uncovered with translucent red, and a small cursor marks
+         *  the live view direction. The strips are *not* a
+         *  pixel-aligned AR overlay — that needs lens calibration we
+         *  don't have — but they capture the same panning-feedback
+         *  loop without the alignment work. */}
+        {capturing && <CoverageCompassStrips />}
       </div>
 
       {/* Coverage canvas. PiP on portrait (top-left, 35% × 35%);
@@ -205,24 +224,73 @@ export default function CapturePage() {
         >
           <ambientLight intensity={0.7} />
           <directionalLight position={[3, 5, 2]} intensity={0.6} />
-          <Bounds margin={1.4} observe>
-            <CoverageVoxels />
-            {/* Splat preview when the server has written one;
-                otherwise fall back to the raw point cloud so the
-                user always sees *something* growing. SplatLayer
-                renders the same xyz positions as gaussians, so once
-                the first splat snapshot arrives (~2 s in) we hide
-                the points to avoid double-render. */}
-            {latestSplatPreview ? (
-              <SplatLayer url={latestSplatPreview} />
-            ) : (
-              <CapturePointCloud />
-            )}
-            <CaptureFrustum />
-          </Bounds>
+          {pipMode === "follow" ? (
+            // Follow mode skips Bounds (which would auto-fit the
+            // view to scene contents and override our pose-driven
+            // camera every render). FollowPoseCamera writes
+            // position+quaternion straight from the latest pose.
+            <>
+              <CoverageVoxels />
+              {latestSplatPreview ? (
+                <SplatLayer url={latestSplatPreview} />
+              ) : (
+                <CapturePointCloud />
+              )}
+              <CaptureFrustum />
+              <FollowPoseCamera />
+            </>
+          ) : (
+            <Bounds margin={1.4} observe>
+              <CoverageVoxels />
+              {/* Splat preview when the server has written one;
+                  otherwise fall back to the raw point cloud so the
+                  user always sees *something* growing. SplatLayer
+                  renders the same xyz positions as gaussians, so once
+                  the first splat snapshot arrives (~2 s in) we hide
+                  the points to avoid double-render. */}
+              {latestSplatPreview ? (
+                <SplatLayer url={latestSplatPreview} />
+              ) : (
+                <CapturePointCloud />
+              )}
+              <CaptureFrustum />
+            </Bounds>
+          )}
           <axesHelper args={[0.3]} />
-          <OrbitControls makeDefault enableDamping dampingFactor={0.08} />
+          {pipMode === "orbit" && (
+            <OrbitControls makeDefault enableDamping dampingFactor={0.08} />
+          )}
         </Canvas>
+        {/* PiP-corner toggle. Stays small + dark so it doesn't hide
+         *  the canvas content; tap target is 32px which is fine for
+         *  a non-primary control. */}
+        <button
+          type="button"
+          onClick={() =>
+            setPipMode((m) => (m === "follow" ? "orbit" : "follow"))
+          }
+          style={{
+            position: "absolute",
+            top: 4,
+            right: 4,
+            padding: "2px 6px",
+            background: "rgba(10, 10, 10, 0.78)",
+            color: "#fff",
+            border: "1px solid rgba(255, 255, 255, 0.4)",
+            borderRadius: 3,
+            fontSize: "10px",
+            letterSpacing: "0.04em",
+            minHeight: 24,
+          }}
+          aria-pressed={pipMode === "follow"}
+          title={
+            pipMode === "follow"
+              ? "PiP follows your phone's orientation; tap to orbit freely"
+              : "PiP is free-orbit; tap to follow the live pose"
+          }
+        >
+          {pipMode === "follow" ? "follow ●" : "orbit ○"}
+        </button>
       </div>
 
       {/* Stats + controls overlay.
@@ -846,6 +914,157 @@ function InsecureContextNotice() {
       </div>
     </div>
   );
+}
+
+/** Two strips overlaid on the live camera feed showing where the
+ *  phone has been pointed: the top strip is azimuth (pan left-right),
+ *  the side strip is elevation (tilt up-down). Each cell is one
+ *  10° bucket; covered cells show a black/white diagonal pattern,
+ *  uncovered cells show translucent red, and a cursor marks the
+ *  current view direction so the user knows which red region
+ *  they'd fill in by panning toward it. Scaniverse-style intent
+ *  without the AR alignment cost — strips can't *misalign* with
+ *  the world the way a projected voxel overlay would when our 60°
+ *  HFOV approximation is wrong. */
+function CoverageCompassStrips() {
+  const coverage = useCaptureStore((s) => s.viewCoverage);
+  const curAz = useCaptureStore((s) => s.viewCoverageCurrentAz);
+  const curEl = useCaptureStore((s) => s.viewCoverageCurrentEl);
+
+  // Reduce 2D grid to two 1D strips: azimuth = OR across all
+  // elevations at each azimuth column, elevation = OR across all
+  // azimuths at each elevation row. So the azimuth strip is "have I
+  // pointed here at any elevation?" — exactly the panning-feedback
+  // signal Scaniverse surfaces in its outer ring.
+  const azCovered = useMemo(() => {
+    const out = new Uint8Array(VIEW_COVERAGE_AZ_BUCKETS);
+    for (let el = 0; el < VIEW_COVERAGE_EL_BUCKETS; el++) {
+      for (let az = 0; az < VIEW_COVERAGE_AZ_BUCKETS; az++) {
+        if (coverage[el * VIEW_COVERAGE_AZ_BUCKETS + az] > 0) out[az] = 1;
+      }
+    }
+    return out;
+  }, [coverage]);
+  const elCovered = useMemo(() => {
+    const out = new Uint8Array(VIEW_COVERAGE_EL_BUCKETS);
+    for (let el = 0; el < VIEW_COVERAGE_EL_BUCKETS; el++) {
+      for (let az = 0; az < VIEW_COVERAGE_AZ_BUCKETS; az++) {
+        if (coverage[el * VIEW_COVERAGE_AZ_BUCKETS + az] > 0) {
+          out[el] = 1;
+          break;
+        }
+      }
+    }
+    return out;
+  }, [coverage]);
+
+  // Inline CSS-gradient cell renderer. Shipping the diagonal pattern
+  // as a `repeating-linear-gradient` rather than a PNG keeps it a
+  // pure CSS asset that scales at any DPI without an extra fetch.
+  const COVERED_BG =
+    "repeating-linear-gradient(45deg, #1a1a1a 0 5px, #f8f8f8 5px 10px)";
+  const UNCOVERED_BG = "rgba(232, 89, 58, 0.45)";
+
+  return (
+    <>
+      {/* Azimuth strip — top of the camera view. Honours iOS notch /
+       *  status-bar inset so it doesn't get clipped. */}
+      <div
+        style={{
+          position: "absolute",
+          top: "max(8px, env(safe-area-inset-top))",
+          left: 12,
+          right: 12,
+          height: 14,
+          display: "flex",
+          gap: 1,
+          borderRadius: 3,
+          overflow: "hidden",
+          opacity: 0.9,
+          pointerEvents: "none",
+        }}
+        aria-label="azimuth coverage"
+      >
+        {Array.from({ length: VIEW_COVERAGE_AZ_BUCKETS }).map((_, i) => (
+          <div
+            key={i}
+            style={{
+              flex: 1,
+              background: azCovered[i] ? COVERED_BG : UNCOVERED_BG,
+              outline:
+                i === curAz ? "2px solid #ffd166" : "1px solid rgba(0,0,0,0.4)",
+              outlineOffset: i === curAz ? -2 : -1,
+              zIndex: i === curAz ? 2 : 1,
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Elevation strip — left edge. Stacks bottom-up so the lowest
+       *  cell renders at the bottom of the screen (looking down) and
+       *  the topmost cell at the top (looking up), matching the
+       *  user's spatial intuition. */}
+      <div
+        style={{
+          position: "absolute",
+          // Match the safe-area awareness of the azimuth strip + the
+          // bottom-anchor of the diagnostic chip so the strip doesn't
+          // overlap either.
+          top: "calc(max(8px, env(safe-area-inset-top)) + 22px)",
+          bottom:
+            "max(140px, calc(env(safe-area-inset-bottom) + 140px))",
+          left: 12,
+          width: 14,
+          display: "flex",
+          flexDirection: "column-reverse",
+          gap: 1,
+          borderRadius: 3,
+          overflow: "hidden",
+          opacity: 0.9,
+          pointerEvents: "none",
+        }}
+        aria-label="elevation coverage"
+      >
+        {Array.from({ length: VIEW_COVERAGE_EL_BUCKETS }).map((_, i) => (
+          <div
+            key={i}
+            style={{
+              flex: 1,
+              background: elCovered[i] ? COVERED_BG : UNCOVERED_BG,
+              outline:
+                i === curEl ? "2px solid #ffd166" : "1px solid rgba(0,0,0,0.4)",
+              outlineOffset: i === curEl ? -2 : -1,
+              zIndex: i === curEl ? 2 : 1,
+            }}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** Drives the canvas camera from the latest SLAM pose so the PiP
+ *  shows the splat from the user's *current* viewpoint, not a fixed
+ *  orbit. Skips when no poses have arrived yet — leaves the default
+ *  camera position so the canvas isn't blank during the warmup. */
+function FollowPoseCamera() {
+  const poses = useCaptureStore((s) => s.poses);
+  // useThree gives us the live camera the Canvas mounted; useFrame
+  // would also work but per-frame setStates pile up during the SLAM
+  // gaps. Updating in an effect on the latest pose change is enough.
+  const camera = useThree((s) => s.camera);
+
+  useEffect(() => {
+    if (poses.length === 0) return;
+    const latest = poses[poses.length - 1];
+    const [tx, ty, tz] = latest.t;
+    const [qx, qy, qz, qw] = latest.q;
+    camera.position.set(tx, ty, tz);
+    camera.quaternion.set(qx, qy, qz, qw);
+    camera.updateMatrixWorld();
+  }, [poses, camera]);
+
+  return null;
 }
 
 /** Renders the latest pose as a small frustum so the user can read
