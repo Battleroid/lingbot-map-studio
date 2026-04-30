@@ -16,15 +16,34 @@ import type {
 // default `make up` localhost stack but breaks the HTTPS-via-Caddy path:
 // the same web image gets reverse-proxied at `https://studio.local`, and
 // a hardcoded `http://localhost:8000` would mixed-content-block the
-// browser. When the env var is unset (compose passes through `""` over
-// the args -> env handoff), `window.location.origin` plus the same-host
-// `/api/*` proxy entry in the Caddyfile gives us the right base for
-// free. Server-side rendering still needs a stable string, so we fall
-// back to the historical localhost default there.
+// browser.
+//
+// When the env var is unset (compose passes through `""` over the args
+// -> env handoff), we fall back to `window.location.origin` so an https
+// page goes through Caddy on the same host. The one wrinkle: with the
+// https profile up, the web container *also* publishes port 3000 (Next
+// in dev mode), so a user who navigates to http://localhost:3000 lands
+// on Next directly, bypassing Caddy. Calls to `/api/*` then hit Next
+// (which has no such routes) and return Next's "Server action not
+// found" 404 because Next interprets multipart POSTs as Server Actions.
+// The port-3000 + plain-http branch below redirects API traffic to
+// the api container's published port directly, which keeps the dev
+// access path functional alongside the canonical Caddy access path.
+//
+// Server-side rendering still needs a stable string, so we fall back
+// to the historical localhost default there.
 function resolveApiBase(): string {
   const fromEnv = process.env.NEXT_PUBLIC_API_BASE;
   if (fromEnv && fromEnv.length > 0) return fromEnv;
-  if (typeof window !== "undefined") return window.location.origin;
+  if (typeof window !== "undefined") {
+    if (
+      window.location.protocol === "http:" &&
+      window.location.port === "3000"
+    ) {
+      return `http://${window.location.hostname}:8000`;
+    }
+    return window.location.origin;
+  }
   return "http://localhost:8000";
 }
 
