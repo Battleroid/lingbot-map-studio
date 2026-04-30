@@ -50,6 +50,8 @@ export default function CapturePage() {
   const pointsCount = useCaptureStore((s) => s.pointsCount);
   const sessionError = useCaptureStore((s) => s.error);
   const reconnectAttempt = useCaptureStore((s) => s.reconnectAttempt);
+  const framesSent = useCaptureStore((s) => s.framesSent);
+  const framesDroppedClient = useCaptureStore((s) => s.framesDroppedClient);
 
   // "open" or actively retrying — both are flavours of an in-progress
   // session, so treat them as `capturing` for the purpose of which
@@ -194,7 +196,16 @@ export default function CapturePage() {
         </Canvas>
       </div>
 
-      {/* Stats + controls overlay. */}
+      {/* Stats + controls overlay.
+       *  Two frame counters intentionally: `frames sent` is how many
+       *  the phone has *attempted* to push to the server (incremented
+       *  client-side in captureSession.sendFrame), `processed` is how
+       *  many the SLAM tracker has *consumed* (server-side stats). If
+       *  the first one grows but the second stays at 0 the WS-to-
+       *  server pipe is broken; if neither grows the camera capture
+       *  itself is the issue. The split is what makes a stuck capture
+       *  diagnosable from the phone instead of needing to ssh into
+       *  the studio. */}
       <div
         style={{
           position: "absolute",
@@ -209,7 +220,10 @@ export default function CapturePage() {
       >
         ●&nbsp;{pointsCount.toLocaleString()} pts &middot;{" "}
         {Math.round(summary.ratio * 100)}% covered &middot;{" "}
-        {stats.frames} frames {stats.dropped > 0 && `(${stats.dropped} dropped)`}
+        sent {framesSent}
+        {framesDroppedClient > 0 && ` (${framesDroppedClient} dropped)`} ·
+        processed {stats.frames}
+        {stats.dropped > 0 && ` (${stats.dropped} dropped)`}
       </div>
 
       {reconnecting && (
