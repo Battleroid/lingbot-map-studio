@@ -40,18 +40,35 @@ RUN pip install \
 RUN pip install "gsplat==1.4.0"
 
 # MonoGS upstream pulls in a handful of pure-Python deps that aren't
-# in the base image. The first one we hit at runtime was `munch`
-# (config dict wrapper); `pyyaml` + `imageio` + `lpips` are the next
-# couple so we install them up front rather than discovering them
-# one job-failure at a time. `evo` (trajectory eval) and `wandb`
-# (logging) are intentionally skipped — MonoGS uses them in tools
-# we don't exercise; pulling them in adds ~250 MB of image weight
-# for nothing.
+# in the base image. We've now hit `munch` and `wandb` at runtime;
+# the rest of this list is the "next likely candidates" set scraped
+# from MonoGS's imports — installing them up front so we stop
+# whack-a-mole'ing one missing-import error per scan:
+#
+#   munch       — config dict wrapper used by `MonoGS/utils/config_utils`.
+#   pyyaml      — config-file loading.
+#   imageio     — image read/write outside opencv.
+#   lpips       — perceptual loss for refinement.
+#   wandb       — logging hooks; MonoGS imports it eagerly even when
+#                 the run-time `--use_wandb` flag is off, so a missing
+#                 install is a hard ImportError on first call.
+#   plyfile     — splat I/O (already in the trainer pip install above
+#                 but listed here for clarity if that one moves).
+#   evo         — trajectory evaluation utilities.
+#   matplotlib  — plot generation (some MonoGS code paths import it
+#                 unconditionally even when no plot is rendered).
+#
+# Pin to the major versions MonoGS upstream's requirements file
+# nominates; minor-version drift is tolerable because we never call
+# these libraries directly.
 RUN pip install --no-cache-dir \
         "munch==4.0.0" \
         "pyyaml==6.0.1" \
         "imageio==2.34.2" \
-        "lpips==0.1.4"
+        "lpips==0.1.4" \
+        "wandb==0.17.7" \
+        "evo==1.28.1" \
+        "matplotlib==3.9.2"
 
 # Build deps for MonoGS source build (its 3DGS rasterizer ships its own
 # CUDA extensions).
