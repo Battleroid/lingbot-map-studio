@@ -264,49 +264,6 @@ def test_resolve_live_session_resolves_monogs():
     assert hasattr(s, "set_artifact_dir")
 
 
-@pytest.mark.asyncio
-async def test_capture_session_emits_splat_preview(tmp_data_dir):
-    """After enough frames, the session writes a splat.ply preview to
-    its preview dir and emits a `partial_splat` event so the capture
-    page's SplatLayer can render it. Pin the wiring so a future change
-    that drops the periodic preview is loud."""
-    from app.cloud.capture_session import (
-        CaptureSession,
-        _PREVIEW_MIN_INTERVAL_S,
-    )
-    import app.cloud.capture_session as cap_mod
-
-    # Force the throttle to ~0 so the test doesn't have to sleep
-    # 2 s for the second preview tick.
-    monkeypatched = 0.0
-    cap_mod._PREVIEW_MIN_INTERVAL_S = monkeypatched
-    try:
-        session = CaptureSession(session_id="test-cs-preview", backend="monogs")
-        await session.start()
-        rng = np.random.default_rng(2)
-        for idx in range(10):
-            img = rng.integers(0, 255, size=(240, 320, 3), dtype=np.uint8)
-            await session.push_frame(idx, img)
-            await asyncio.sleep(0.05)
-
-        deadline = asyncio.get_event_loop().time() + 4.0
-        while session._preview_count < 1 and asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(0.05)
-
-        assert session._preview_count >= 1, "no splat preview was emitted"
-        assert (session.preview_dir / "splat.ply").exists()
-
-        # The emit_queue should carry at least one `partial_splat` msg.
-        types_seen: list[str] = []
-        while not session.emit_queue.empty():
-            types_seen.append(session.emit_queue.get_nowait().type)
-        assert "partial_splat" in types_seen, types_seen
-
-        await session.stop()
-    finally:
-        cap_mod._PREVIEW_MIN_INTERVAL_S = _PREVIEW_MIN_INTERVAL_S
-
-
 def test_ws_decode_path_imports_resolve():
     """Closes a regression where every JPEG frame the phone pushed was
     silently dropped because the api container's image was missing

@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import { capturePreviewSplatUrl, captureWsUrl } from "@/lib/api";
+import { captureWsUrl } from "@/lib/api";
 
 /**
  * Live camera-capture client state.
@@ -100,13 +100,6 @@ interface CaptureState {
   // their connection is the bottleneck.
   framesDroppedClient: number;
 
-  // URL to the latest splat-preview snapshot the server has written,
-  // or `null` while we're still waiting for the first one. Updated on
-  // each `partial_splat` event the WS pumps in. The url's query
-  // param is incremented each time so the SplatLayer's `useEffect`
-  // sees a fresh dependency and re-fetches.
-  latestSplatPreview: string | null;
-
   // Local view of the camera element's readiness. Pushed in by
   // `CameraStream` on each frame-grab tick. Surfaced on the chip so
   // "phone not sending" can be diagnosed as either "video element
@@ -172,7 +165,6 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   error: null,
   framesSent: 0,
   framesDroppedClient: 0,
-  latestSplatPreview: null,
   videoReady: false,
   videoSize: null,
   log: [],
@@ -241,7 +233,6 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       error: null,
       framesSent: 0,
       framesDroppedClient: 0,
-      latestSplatPreview: null,
       videoReady: false,
       videoSize: null,
       log: [],
@@ -449,23 +440,6 @@ function connectWs(
           "info",
           `server ready (backend=${msg.data["backend"] ?? "?"})`,
         );
-      } else if (msg.type === "partial_splat") {
-        // Server has written a fresh splat preview to disk. Build
-        // a cache-busted URL the SplatLayer can fetch — the
-        // `preview` counter the server emits doubles as the
-        // version number, so we just pass it through.
-        const cur = get();
-        if (cur.sessionId == null) return;
-        const version = Number(msg.data["preview"] ?? Date.now());
-        set({
-          latestSplatPreview: capturePreviewSplatUrl(cur.sessionId, version),
-        });
-        if (version === 1) {
-          get().pushLog(
-            "info",
-            `first splat preview (n_points=${msg.data["n_points"] ?? "?"})`,
-          );
-        }
       } else if (msg.type === "error") {
         const m = String(msg.data["message"] ?? "capture error");
         set({ error: m });

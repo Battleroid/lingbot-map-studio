@@ -1,12 +1,16 @@
-"""Pin the trainer auto-select logic. Three branches to cover:
+"""Pin the trainer auto-select logic.
 
-  * torch isn't installed → simulated.
-  * torch is installed but CUDA isn't available → simulated.
-  * torch + CUDA + gsplat all importable → CUDA trainer.
+The simulated fallback was removed in the "no fake gsplat output"
+fix — `select_trainer_cls()` now raises
+`GsplatTrainerUnavailableError` with install instructions whenever
+the real CUDA stack isn't present. The simulated class still lives
+in the module so tests can drive the pipeline on a CPU box (by
+pinning `processor.trainer_cls = SimulatedSplatTrainer` directly),
+but the *resolver* refuses to return it.
 
-CI machines have neither torch nor CUDA, so by default `select_trainer_cls()`
-returns the simulated class. We monkeypatch torch into sys.modules to
-exercise the other branches without needing a GPU.
+CI machines have neither torch nor CUDA, so the resolver is the
+"raise" path. The CUDA-available branch is GPU-only and stays
+skipped by default.
 """
 
 from __future__ import annotations
@@ -17,61 +21,62 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_select_trainer_simulated_when_torch_missing(monkeypatch):
-    """No torch on PATH → simulated trainer (covers CPU dev boxes that
+def test_select_trainer_raises_when_torch_missing(monkeypatch):
+    """No torch on PATH → loud error (covers CPU dev boxes that
     haven't installed the worker-gs deps)."""
     from app.processors.gsplat.trainer import (
-        SimulatedSplatTrainer,
+        GsplatTrainerUnavailableError,
         select_trainer_cls,
     )
 
     monkeypatch.setitem(sys.modules, "torch", None)
-    assert select_trainer_cls() is SimulatedSplatTrainer
+    with pytest.raises(GsplatTrainerUnavailableError, match="torch is not installed"):
+        select_trainer_cls()
 
 
-def test_select_trainer_simulated_when_cuda_unavailable(monkeypatch):
-    """Torch importable but no GPU passthrough → simulated trainer.
+def test_select_trainer_raises_when_cuda_unavailable(monkeypatch):
+    """Torch importable but no GPU passthrough → loud error.
     Covers a worker-gs container without `runtime: nvidia`."""
     from app.processors.gsplat.trainer import (
-        SimulatedSplatTrainer,
+        GsplatTrainerUnavailableError,
         select_trainer_cls,
     )
 
     fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    assert select_trainer_cls() is SimulatedSplatTrainer
+    with pytest.raises(
+        GsplatTrainerUnavailableError, match="torch.cuda.is_available"
+    ):
+        select_trainer_cls()
 
 
-def test_select_trainer_simulated_when_gsplat_missing(monkeypatch):
+def test_select_trainer_raises_when_gsplat_missing(monkeypatch):
     """Torch + CUDA both fine but `gsplat` package not installed →
-    simulated trainer. Covers a worker-gs image that still has the
+    loud error. Covers a worker-gs image that still has the
     pre-Phase-1 Dockerfile."""
     from app.processors.gsplat.trainer import (
-        SimulatedSplatTrainer,
+        GsplatTrainerUnavailableError,
         select_trainer_cls,
     )
 
     fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    # Force a re-import miss for gsplat.rasterization.
     monkeypatch.setitem(sys.modules, "gsplat", None)
     monkeypatch.setitem(sys.modules, "gsplat.rasterization", None)
-    assert select_trainer_cls() is SimulatedSplatTrainer
+    with pytest.raises(GsplatTrainerUnavailableError, match="`gsplat` package"):
+        select_trainer_cls()
 
 
-def test_processor_constructor_invokes_auto_select(monkeypatch):
-    """GsplatProcessor.__init__ should rebind the instance's trainer_cls
-    to whatever select_trainer_cls() returns. CPU CI: stays simulated."""
-    from app.processors.gsplat.trainer import (
-        GsplatProcessor,
-        SimulatedSplatTrainer,
-    )
+def test_processor_defers_resolution_to_run(monkeypatch):
+    """GsplatProcessor.__init__ no longer calls select_trainer_cls()
+    eagerly — the resolver runs inside `run()` so a missing dep
+    surfaces as a clean job-failure event instead of crashing the
+    worker process at construction. The instance attr stays at the
+    class-level default (None) until run() resolves it."""
+    from app.processors.gsplat.trainer import GsplatProcessor
 
     p = GsplatProcessor()
-    # On CI without torch/gsplat the auto-select returns the simulated
-    # class — this just pins that the constructor calls into the factory
-    # at all (instead of leaving the class-attr default in place silently).
-    assert p.trainer_cls is SimulatedSplatTrainer
+    assert p.trainer_cls is None
 
 
 @pytest.mark.skipif(

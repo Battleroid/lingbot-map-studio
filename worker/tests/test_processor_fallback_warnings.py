@@ -92,10 +92,15 @@ async def test_slam_emits_warn_event_when_session_is_simulated(
 
 
 @pytest.mark.asyncio
-async def test_gsplat_emits_warn_event_when_trainer_is_simulated(tmp_data_dir):
-    """GsplatProcessor.run should emit a level=warn JobEvent before kicking
-    off the simulated trainer. The metrics it produces look real but aren't
-    — the user needs to know."""
+async def test_gsplat_emits_error_event_when_real_trainer_unavailable(
+    tmp_data_dir,
+):
+    """The simulated-fallback path was removed in the "no fake gsplat
+    output" fix. When the real CUDA trainer can't be loaded,
+    `GsplatProcessor.run` now emits a level=error system event with
+    install instructions and re-raises so the runner marks the job
+    failed — instead of silently running the placeholder and shipping
+    synthetic PSNR / loss numbers as if they were real."""
     from app.jobs import store
     from app.jobs.cancel import CancelToken
     from app.jobs.schema import (
@@ -177,27 +182,28 @@ async def test_gsplat_emits_warn_event_when_trainer_is_simulated(tmp_data_dir):
         set_frames_total=noop,
     )
 
-    processor = GsplatProcessor()
-    try:
-        await processor.run(ctx)
-    except Exception:
-        # The simulated trainer may bail on the tiny-input edge case; we
-        # only care that the warn event landed before the run started.
-        pass
+    from app.processors.gsplat.trainer import GsplatTrainerUnavailableError
 
-    sim_warns = [
+    processor = GsplatProcessor()
+    with pytest.raises(GsplatTrainerUnavailableError):
+        await processor.run(ctx)
+
+    err_events = [
         e
         for e in events
-        if e.level == "warn"
+        if e.level == "error"
         and e.stage == "system"
-        and "simulated" in e.message.lower()
+        and "gsplat" in e.message.lower()
     ]
-    assert sim_warns, (
-        "expected a level=warn event mentioning the simulated trainer; got "
-        f"{[(e.level, e.stage, e.message[:60]) for e in events]}"
+    assert err_events, (
+        "expected a level=error system event with install instructions; "
+        f"got {[(e.level, e.stage, e.message[:60]) for e in events]}"
     )
-    assert "gsplat" in sim_warns[0].message.lower()
-    assert sim_warns[0].data.get("simulated") is True
+    assert err_events[0].data.get("missing_dep") == "gsplat"
+    assert (
+        "torch is not installed" in err_events[0].message
+        or "gsplat" in err_events[0].message.lower()
+    )
 
 
 @pytest.mark.asyncio

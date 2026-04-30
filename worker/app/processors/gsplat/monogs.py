@@ -98,22 +98,39 @@ class MonogsProcessor(SlamProcessor):
         return session
 
 
-def select_session_cls() -> type[SlamSession]:
-    """Auto-select the CUDA session when its dependencies are all
-    importable; fall back to the simulated session otherwise.
+class MonogsSessionUnavailableError(RuntimeError):
+    """Raised by `select_session_cls()` when the real MonoGS CUDA
+    session can't be loaded. Mirrors `GsplatTrainerUnavailableError`:
+    we no longer silently fall back to the placeholder, since the
+    placeholder produces synthetic geometry that doesn't represent
+    the scanned scene.
 
-    MonoGS is research-grade with a complex multi-process architecture;
-    the upstream import surface shifts between commits. The CUDA
-    session probes a couple of likely entry points and reports a clean
-    ImportError when none match — the factory then falls back to the
-    simulated session and Phase 0's warn event tells the user.
+    `_MonogsSession` is still available for tests (which instantiate
+    it directly). Production code paths that go through the resolver
+    get the real CUDA session or a clean error."""
+
+
+def select_session_cls() -> type[SlamSession]:
+    """Resolve the real MonoGS CUDA session. Raises
+    `MonogsSessionUnavailableError` with install instructions when
+    any prerequisite is missing. No simulated fallback — gsplat
+    output that "looks real but isn't" is the bug we're fixing.
     """
     try:
         import torch  # noqa: PLC0415
-    except ImportError:
-        return _MonogsSession
+    except ImportError as exc:
+        raise MonogsSessionUnavailableError(
+            "monogs: torch is not installed in this worker. The real "
+            "MonoGS tracker requires the worker-gs image (built from "
+            "worker/Dockerfile.gs)."
+        ) from exc
     if not torch.cuda.is_available():
-        return _MonogsSession
+        raise MonogsSessionUnavailableError(
+            "monogs: torch.cuda.is_available() is False. The MonoGS "
+            "tracker needs an NVIDIA GPU + nvidia-container-toolkit "
+            "passthrough; check the worker-gs container's "
+            "deploy.resources.reservations.devices in docker-compose.yml."
+        )
     try:
         # MonoGS isn't a pip-installable package — the Dockerfile clones
         # the source into /opt/monogs and adds it to PYTHONPATH. Probe
@@ -129,11 +146,12 @@ def select_session_cls() -> type[SlamSession]:
             importlib.import_module("monogs")
         from app.processors.gsplat.monogs_cuda import MonogsCudaSession  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
-        log.info(
-            "monogs: real CUDA tracker not importable (%s); using simulated",
-            exc,
-        )
-        return _MonogsSession
+        raise MonogsSessionUnavailableError(
+            "monogs: the upstream MonoGS source isn't importable in "
+            f"this worker ({type(exc).__name__}: {exc}). The Dockerfile "
+            "should `git clone` it into /opt/monogs and add that path "
+            "to PYTHONPATH; see worker/Dockerfile.gs."
+        ) from exc
     return MonogsCudaSession
 
 

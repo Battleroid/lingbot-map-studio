@@ -2,8 +2,14 @@
 
 import { Canvas } from "@react-three/fiber";
 import { Bounds, OrbitControls } from "@react-three/drei";
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import * as THREE from "three";
 
 import { CameraOverlayAR } from "@/components/capture/CameraOverlayAR";
@@ -13,13 +19,22 @@ import {
   useCoverageSummary,
 } from "@/components/capture/CoverageVoxels";
 import { FollowPoseCamera } from "@/components/capture/FollowPoseCamera";
-import { SplatLayer } from "@/components/Viewer/SplatLayer";
 import {
   startCaptureSession,
   stopCaptureSession,
   type CaptureBackend,
 } from "@/lib/api";
 import { useCaptureStore } from "@/lib/captureSession";
+
+/** Type-guard for the `?backend=` query param. Anything outside the
+ *  dropdown's supported set falls back to the default; we don't want
+ *  a stale link `/capture?backend=foo` to crash the page or push an
+ *  invalid value into the API. */
+function isCaptureBackend(s: string | null | undefined): s is CaptureBackend {
+  return (
+    s === "mast3r_slam" || s === "droid_slam" || s === "dpvo" || s === "monogs"
+  );
+}
 
 const CAPTURE_BUTTON_STYLE: CSSProperties = {
   padding: "12px 24px",
@@ -45,9 +60,29 @@ const CAPTURE_BUTTON_STYLE: CSSProperties = {
  * tile + the gsplat-from-source tile. The existing batch-upload
  * pipeline is unchanged; this just adds a streaming alternative.
  */
+/** Public default export. Wraps the real component in `<Suspense>`
+ *  so `useSearchParams()` is allowed under Next 14's static prerender
+ *  rules — without the boundary the build bails with
+ *  `useSearchParams() should be wrapped in a suspense boundary`. */
 export default function CapturePage() {
+  return (
+    <Suspense fallback={null}>
+      <CapturePageInner />
+    </Suspense>
+  );
+}
+
+function CapturePageInner() {
   const router = useRouter();
-  const [backend, setBackend] = useState<CaptureBackend>("mast3r_slam");
+  // Pre-select the backend the user picked on the home page so they
+  // don't have to re-pick it here. Validates against the supported
+  // dropdown values; an unrecognised query falls back to the default.
+  const searchParams = useSearchParams();
+  const backendFromQuery = searchParams?.get("backend");
+  const initialBackend: CaptureBackend = isCaptureBackend(backendFromQuery)
+    ? backendFromQuery
+    : "mast3r_slam";
+  const [backend, setBackend] = useState<CaptureBackend>(initialBackend);
   const [deviceId, setDeviceId] = useState<string | undefined>(undefined);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [busy, setBusy] = useState<"start" | "stop" | null>(null);
@@ -63,7 +98,6 @@ export default function CapturePage() {
   const reconnectAttempt = useCaptureStore((s) => s.reconnectAttempt);
   const framesSent = useCaptureStore((s) => s.framesSent);
   const framesDroppedClient = useCaptureStore((s) => s.framesDroppedClient);
-  const latestSplatPreview = useCaptureStore((s) => s.latestSplatPreview);
   const videoReady = useCaptureStore((s) => s.videoReady);
   const videoSize = useCaptureStore((s) => s.videoSize);
   const log = useCaptureStore((s) => s.log);
@@ -231,28 +265,14 @@ export default function CapturePage() {
             // position+quaternion straight from the latest pose.
             <>
               <CoverageVoxels />
-              {latestSplatPreview ? (
-                <SplatLayer url={latestSplatPreview} />
-              ) : (
-                <CapturePointCloud />
-              )}
+              <CapturePointCloud />
               <CaptureFrustum />
               <FollowPoseCamera />
             </>
           ) : (
             <Bounds margin={1.4} observe>
               <CoverageVoxels />
-              {/* Splat preview when the server has written one;
-                  otherwise fall back to the raw point cloud so the
-                  user always sees *something* growing. SplatLayer
-                  renders the same xyz positions as gaussians, so once
-                  the first splat snapshot arrives (~2 s in) we hide
-                  the points to avoid double-render. */}
-              {latestSplatPreview ? (
-                <SplatLayer url={latestSplatPreview} />
-              ) : (
-                <CapturePointCloud />
-              )}
+              <CapturePointCloud />
               <CaptureFrustum />
             </Bounds>
           )}
@@ -377,10 +397,11 @@ export default function CapturePage() {
           <option value="mast3r_slam">mast3r-slam (default)</option>
           <option value="droid_slam">droid-slam</option>
           <option value="dpvo">dpvo</option>
-          {/* MonoGS: produces a real Gaussian Splat as it tracks. The
-              capture session feeds it the same frame stream + writes
-              a live splat preview to disk, which the canvas above
-              renders via SplatLayer. */}
+          {/* MonoGS: the captured frames are queued for real CUDA
+              MonoGS reconstruction in worker-gs after stop. The live
+              session in this api process is just a pose-tracker for
+              the AR coverage overlay; the splat itself is generated
+              post-stop on the GPU worker. */}
           <option value="monogs">monogs (gaussian splat)</option>
         </select>
         {devices.length > 1 && (
@@ -503,7 +524,6 @@ export default function CapturePage() {
               framesProcessed: stats.frames,
               framesDroppedServer: stats.dropped,
               pointsCount,
-              hasSplatPreview: latestSplatPreview != null,
             });
             const body = log
               .map(
@@ -723,7 +743,6 @@ function formatLogHeader(state: {
   framesProcessed: number;
   framesDroppedServer: number;
   pointsCount: number;
-  hasSplatPreview: boolean;
 }): string {
   const lines = [
     `# vid3d capture log @ ${new Date().toISOString()}`,
@@ -732,7 +751,7 @@ function formatLogHeader(state: {
     `ws: ${state.status}${state.reconnectAttempt > 0 ? ` (retry ${state.reconnectAttempt})` : ""}`,
     `frames sent=${state.framesSent} dropped(client)=${state.framesDroppedClient}`,
     `frames processed=${state.framesProcessed} dropped(server)=${state.framesDroppedServer}`,
-    `points=${state.pointsCount} splat-preview=${state.hasSplatPreview ? "yes" : "no"}`,
+    `points=${state.pointsCount}`,
   ];
   return lines.join("\n");
 }

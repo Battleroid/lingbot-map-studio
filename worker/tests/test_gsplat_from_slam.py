@@ -135,7 +135,16 @@ async def test_gsplat_trains_from_slam_source(
         set_frames_total=_noop,
     )
 
-    result = await GsplatProcessor().run(ctx)
+    # The production resolver no longer falls back to simulated, so
+    # for CPU CI we pin the simulated trainer directly. Tests still
+    # exercise the same orchestration code in `run()` (only the
+    # specific trainer class differs); a GPU runner would override
+    # this back to None and let `select_trainer_cls()` resolve the
+    # real CUDA trainer.
+    from app.processors.gsplat.trainer import SimulatedSplatTrainer
+    processor = GsplatProcessor()
+    processor.trainer_cls = SimulatedSplatTrainer
+    result = await processor.run(ctx)
 
     names = {a.name for a in result.artifacts}
     assert {"splat.ply", "cameras.json", "splat.splat"}.issubset(names)

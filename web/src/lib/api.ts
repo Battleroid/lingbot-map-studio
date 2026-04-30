@@ -349,16 +349,6 @@ export function captureWsUrl(sessionId: string): string {
   return `${proto}//${u.host}/api/capture/${sessionId}`;
 }
 
-/** URL for the live splat-preview file the capture session writes to
- *  disk every ~2 s. Includes a `?v=<n>` cache-buster so each
- *  partial_splat event produces a new URL, which the SplatLayer's
- *  effect picks up as a refetch trigger. */
-export function capturePreviewSplatUrl(
-  sessionId: string,
-  version: number,
-): string {
-  return `${API_BASE}/api/capture/${sessionId}/preview/splat.ply?v=${version}`;
-}
 
 // --- Cloud (remote execution) -----------------------------------------
 
