@@ -82,31 +82,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ninja-build git \
     && rm -rf /var/lib/apt/lists/*
 
+# Explicit CUDA env for setup.py CUDAExtension probes. The base
+# image (nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04) installs the
+# toolkit at /usr/local/cuda but doesn't always export CUDA_HOME on
+# every shell — torch's `CUDAExtension` sniffs that env var to
+# locate nvcc and the headers, and falls over silently when it's
+# unset. Setting it here means simple-knn / diff-gaussian-
+# rasterization both find nvcc deterministically.
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:${PATH}
+
 # MonoGS / Photo-SLAM (Phase 5). Upstream is a runnable research project
 # (multiple top-level dirs: gui/, gaussian_splatting/, submodules/, etc.)
 # without proper Python packaging — `pip install .` fails on the
 # multi-top-level-package layout.
 #
-# Workaround: clone the repo, install its CUDA rasterizer submodule
-# directly (the only piece with a real setup.py), and add the repo
-# root to PYTHONPATH so Python can import `gaussian_splatting.*` from
-# wherever the source landed. The wrapper in
-# `app.processors.gsplat.monogs_cuda` probes those module paths and
-# falls back to the simulated session cleanly when any piece is
-# missing — Phase 0's warn event tells the user.
+# Workaround: clone the repo, install its CUDA rasterizer + KNN
+# submodules directly (they're the only pieces with real setup.py
+# files), and add the repo root to PYTHONPATH so Python can import
+# `gaussian_splatting.*` from wherever the source landed.
 #
-# If the diff-gaussian-rasterization submodule build fails (CUDA arch
-# mismatch, missing nvcc, etc.) the rest of the image still builds —
-# the wrapper's import probe will fail and MonoGS auto-falls back to
-# the simulated session.
+# Build is strict: if either submodule fails to compile we let the
+# image build fail with the actual nvcc/g++ error. The previous
+# `|| echo "build failed; falls back to simulated"` swallowed real
+# compile errors and produced an image that booted fine but blew up
+# at first job with `ModuleNotFoundError: No module named 'simple_knn'`
+# — the user explicitly called out that simulated splat output is
+# useless, so we'd rather catch the build break here.
 ARG MONOGS_SHA=main
 RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     && cd /opt/monogs \
     && git checkout ${MONOGS_SHA} \
-    && (pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
-            || echo "monogs: diff-gaussian-rasterization build failed; CUDA path will fall back to simulated") \
-    && (pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
-            || echo "monogs: simple-knn build failed; CUDA path will fall back to simulated") \
+    && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
+    && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git
 ENV PYTHONPATH=/opt/monogs:$PYTHONPATH
 
