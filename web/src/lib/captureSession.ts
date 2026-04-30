@@ -33,6 +33,19 @@ export interface CaptureStats {
   dropped: number;
 }
 
+export interface CaptureLogEntry {
+  /** Wall-clock ms since session start; relative timestamps are more
+   *  useful than absolute on a phone where the user may not have set
+   *  the timezone correctly. */
+  t: number;
+  level: "info" | "warn" | "error";
+  msg: string;
+}
+
+/** How many log entries to keep before evicting from the head. Caps
+ *  the worst-case memory of an all-day capture session at a few KB. */
+const LOG_CAPACITY = 200;
+
 interface CaptureState {
   status: CaptureStatus;
   sessionId: string | null;
@@ -80,6 +93,13 @@ interface CaptureState {
   videoReady: boolean;
   videoSize: [number, number] | null;
 
+  // Append-only client-side log of capture-flow events. Bounded so a
+  // long session doesn't pin unbounded memory on a phone. The capture
+  // page exposes a "show log / copy" affordance that ships these
+  // entries to the clipboard so a stuck-capture report from a mobile
+  // user is shareable without needing to ssh into the studio.
+  log: CaptureLogEntry[];
+
   // Reconnect bookkeeping. `reconnectAttempt` is 0 while connected /
   // idle and >0 while a retry is scheduled or in flight (used in the
   // UI to show "reconnecting…" copy + a counter). `reconnectTimer`
@@ -97,6 +117,8 @@ interface CaptureState {
   setVoxelSize: (size: number) => void;
   sendFrame: (blob: Blob) => void;
   setVideoState: (ready: boolean, size: [number, number] | null) => void;
+  pushLog: (level: CaptureLogEntry["level"], msg: string) => void;
+  clearLog: () => void;
 }
 
 const INITIAL_POINT_CAPACITY = 4096;
@@ -128,6 +150,7 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   latestSplatPreview: null,
   videoReady: false,
   videoSize: null,
+  log: [],
   reconnectAttempt: 0,
   reconnectTimer: null,
   userInitiatedClose: false,
@@ -137,13 +160,16 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     // session that ended without an explicit reset.
     const { reconnectTimer } = get();
     if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    sessionT0 = Date.now();
     set({
       sessionId,
       error: null,
       reconnectAttempt: 0,
       reconnectTimer: null,
       userInitiatedClose: false,
+      log: [],
     });
+    get().pushLog("info", `open session ${sessionId}`);
     connectWs(sessionId, set, get);
   },
 
@@ -170,6 +196,10 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     } catch {
       /* noop */
     }
+    // Restart the relative-timestamp clock so a second capture in
+    // the same tab doesn't show "minutes since the page loaded" on
+    // its first log entry.
+    sessionT0 = Date.now();
     set({
       status: "idle",
       sessionId: null,
@@ -186,6 +216,7 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       latestSplatPreview: null,
       videoReady: false,
       videoSize: null,
+      log: [],
       reconnectAttempt: 0,
       reconnectTimer: null,
       userInitiatedClose: false,
@@ -222,8 +253,20 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       try {
         ws.send(buf);
         set((s) => ({ framesSent: s.framesSent + 1 }));
-      } catch {
-        /* drop on disconnect */
+        // Log the first frame we successfully push so the timeline
+        // has a clear "client started sending" marker.
+        const cur = get();
+        if (cur.framesSent === 1) {
+          cur.pushLog(
+            "info",
+            `first frame sent (${(buf as ArrayBuffer).byteLength} bytes)`,
+          );
+        }
+      } catch (exc) {
+        get().pushLog(
+          "warn",
+          `ws.send threw: ${(exc as Error).message ?? exc}`,
+        );
       }
     });
   },
@@ -240,8 +283,34 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
         (cur.videoSize[0] !== size[0] || cur.videoSize[1] !== size[1]));
     if (cur.videoReady === ready && !sizeChanged) return;
     set({ videoReady: ready, videoSize: size });
+    if (sizeChanged && size !== null) {
+      get().pushLog("info", `video ready ${size[0]}x${size[1]}`);
+    }
   },
+
+  pushLog: (level, msg) => {
+    set((s) => {
+      const entry: CaptureLogEntry = {
+        t: Date.now() - sessionT0,
+        level,
+        msg,
+      };
+      const next = s.log.concat(entry);
+      // Bounded ring — drop the oldest if we'd overflow the cap.
+      if (next.length > LOG_CAPACITY) {
+        next.splice(0, next.length - LOG_CAPACITY);
+      }
+      return { log: next };
+    });
+  },
+
+  clearLog: () => set({ log: [] }),
 }));
+
+// Session-relative t=0. Set on module load so the first log entry
+// has a sensible offset; reset() also resets this so a second
+// capture in the same tab starts back at 0.
+let sessionT0 = Date.now();
 
 /** Build a fresh WebSocket for `sessionId` and wire its handlers to
  *  the store. Called from `open()` (first connect) and from the retry
@@ -265,20 +334,25 @@ function connectWs(
     // surface "open" + clear the retry counter so the UI stops
     // showing "reconnecting (n/N)".
     set({ status: "open", reconnectAttempt: 0, error: null });
+    get().pushLog("info", "ws open");
   });
 
   // We schedule the retry from `close` rather than `error` because a
   // remote drop fires `close` after `error`, and reacting to `error`
   // alone would race with the "is this user-initiated?" check below.
   ws.addEventListener("error", () => {
-    /* noop — close handles the retry */
+    get().pushLog("warn", "ws error event");
   });
 
-  ws.addEventListener("close", () => {
+  ws.addEventListener("close", (evt) => {
     const state = get();
     // User pressed Stop / navigated away — honour that.
     if (state.userInitiatedClose) {
       set({ ws: null, status: "closed" });
+      get().pushLog(
+        "info",
+        `ws closed by user (code=${evt.code} reason=${evt.reason || "-"})`,
+      );
       return;
     }
     // Out of retries → surface the failure and stop trying.
@@ -288,6 +362,10 @@ function connectWs(
         status: "closed",
         error: `lost connection after ${RECONNECT_DELAYS_MS.length} retries`,
       });
+      get().pushLog(
+        "error",
+        `ws gave up after ${RECONNECT_DELAYS_MS.length} retries (code=${evt.code})`,
+      );
       return;
     }
     // Schedule the next attempt.
@@ -306,6 +384,10 @@ function connectWs(
       reconnectAttempt: state.reconnectAttempt + 1,
       reconnectTimer: timer,
     });
+    get().pushLog(
+      "warn",
+      `ws closed (code=${evt.code}); retrying in ${delay}ms (attempt ${state.reconnectAttempt + 1}/${RECONNECT_DELAYS_MS.length})`,
+    );
   });
 
   ws.addEventListener("message", (evt) => {
@@ -321,7 +403,23 @@ function connectWs(
         const rows = (msg.data["new"] as number[][]) || [];
         appendPoints(rows, get, set);
       } else if (msg.type === "stats") {
-        set({ stats: msg.data as unknown as CaptureStats });
+        const next = msg.data as unknown as CaptureStats;
+        const prev = get().stats;
+        set({ stats: next });
+        // Log the first stats event explicitly — that's the moment
+        // the server confirms it has decoded a frame, the single
+        // most-useful signal in a stuck-capture report.
+        if (prev.frames === 0 && next.frames > 0) {
+          get().pushLog(
+            "info",
+            `first server-decoded frame (server processed=${next.frames})`,
+          );
+        }
+      } else if (msg.type === "ready") {
+        get().pushLog(
+          "info",
+          `server ready (backend=${msg.data["backend"] ?? "?"})`,
+        );
       } else if (msg.type === "partial_splat") {
         // Server has written a fresh splat preview to disk. Build
         // a cache-busted URL the SplatLayer can fetch — the
@@ -333,11 +431,19 @@ function connectWs(
         set({
           latestSplatPreview: capturePreviewSplatUrl(cur.sessionId, version),
         });
+        if (version === 1) {
+          get().pushLog(
+            "info",
+            `first splat preview (n_points=${msg.data["n_points"] ?? "?"})`,
+          );
+        }
       } else if (msg.type === "error") {
-        set({ error: String(msg.data["message"] ?? "capture error") });
+        const m = String(msg.data["message"] ?? "capture error");
+        set({ error: m });
+        get().pushLog("error", `server: ${m}`);
       }
-    } catch {
-      /* drop malformed */
+    } catch (exc) {
+      get().pushLog("warn", `malformed ws message: ${(exc as Error).message}`);
     }
   });
 }
