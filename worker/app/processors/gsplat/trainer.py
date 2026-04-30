@@ -238,28 +238,46 @@ class SimulatedSplatTrainer(SplatTrainer):
         )
 
 
+class GsplatTrainerUnavailableError(RuntimeError):
+    """Raised by `select_trainer_cls()` when the real CUDA gsplat
+    trainer can't be loaded. The processor catches this and emits a
+    clean job-failure event; we don't silently fall back to the
+    simulated placeholder anymore — the user explicitly asked for
+    real splat output, not synthetic numbers that look real.
+
+    `SimulatedSplatTrainer` still exists in the module for tests
+    (which instantiate it directly). The production resolver below
+    refuses to return it."""
+
+
 def select_trainer_cls() -> type[SplatTrainer]:
-    """Auto-select the CUDA trainer when it's importable; fall back to
-    the simulated trainer otherwise.
+    """Resolve the real CUDA gsplat trainer. Raises
+    `GsplatTrainerUnavailableError` with the install instructions
+    when any of the prerequisites are missing.
 
-    Two failures roll into the same fallback path so a user can run
-    against the simulated trainer without the worker-gs container even
-    being built:
-      * `gsplat` package not installed (Phase 1 image hasn't shipped yet,
-        or the user is on a CPU dev box).
-      * `torch.cuda.is_available()` is False (worker-gs running without
-        GPU passthrough).
-
-    The fallback is *not* silent — `GsplatProcessor.run()` (Phase 0)
-    emits a warn-level event when the simulated trainer is selected, so
-    the user sees it in the log pane.
+    Previously this fell back to `SimulatedSplatTrainer` so the
+    pipeline was always exercisable on a CPU dev box — but the
+    placeholder produces synthetic PSNR/loss numbers and a
+    placeholder splat that doesn't represent the scene, which led to
+    "the splat doesn't look like what I scanned" reports. Erroring
+    out explicitly forces the user to install the real package
+    instead of getting fake-looking-real output.
     """
     try:
         import torch  # noqa: PLC0415
-    except ImportError:
-        return SimulatedSplatTrainer
+    except ImportError as exc:
+        raise GsplatTrainerUnavailableError(
+            "gsplat: torch is not installed in this worker. The real "
+            "CUDA gsplat trainer requires the worker-gs image (built "
+            "from worker/Dockerfile.gs)."
+        ) from exc
     if not torch.cuda.is_available():
-        return SimulatedSplatTrainer
+        raise GsplatTrainerUnavailableError(
+            "gsplat: torch.cuda.is_available() is False. The real "
+            "trainer needs an NVIDIA GPU + nvidia-container-toolkit "
+            "passthrough; check the worker-gs container's "
+            "deploy.resources.reservations.devices in docker-compose.yml."
+        )
     try:
         # Bare-minimum import sanity — `gsplat.rasterization` is the symbol
         # the CUDA trainer touches first. If this raises (missing package,
@@ -267,8 +285,11 @@ def select_trainer_cls() -> type[SplatTrainer]:
         import gsplat.rasterization  # noqa: F401, PLC0415
         from app.processors.gsplat.cuda_trainer import GsplatCudaTrainer  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
-        log.info("gsplat: real CUDA trainer not importable (%s); using simulated", exc)
-        return SimulatedSplatTrainer
+        raise GsplatTrainerUnavailableError(
+            "gsplat: the `gsplat` package isn't importable in this "
+            f"worker ({type(exc).__name__}: {exc}). Install it in "
+            "worker/Dockerfile.gs (the upstream pip name is `gsplat`)."
+        ) from exc
     return GsplatCudaTrainer
 
 
@@ -284,19 +305,19 @@ class GsplatProcessor(Processor):
 
     display_name: ClassVar[str] = "Gaussian Splat"
 
-    # Auto-detect the right trainer class at instantiation time. Tests can
-    # still override this on the instance to force the simulated path
-    # (`processor.trainer_cls = SimulatedSplatTrainer`). The default-
-    # factory pattern keeps the class attr stable while letting the auto-
-    # detect run lazily on the worker that picked up the job.
-    trainer_cls: ClassVar[type[SplatTrainer]] = SimulatedSplatTrainer
+    # Trainer class is resolved lazily inside `run()` so a missing
+    # real-gsplat dep surfaces as a clean job-failure event in the
+    # log pane rather than crashing the worker process at startup.
+    # Tests pin a specific class via `processor.trainer_cls = ...`
+    # before calling run; that path bypasses the resolver entirely.
+    trainer_cls: ClassVar[Optional[type[SplatTrainer]]] = None
 
     def __init__(self) -> None:
-        # Re-bind the instance attribute to whatever auto-detect picks.
-        # The class attribute stays as SimulatedSplatTrainer so isinstance
-        # checks elsewhere (and the warn-event in run()) still see the
-        # right thing on a CPU box.
-        self.trainer_cls = select_trainer_cls()
+        # Don't auto-detect at init time. A worker-gs container that
+        # was built without real gsplat would crash here on every
+        # import even when no gsplat job is in the queue. Resolve in
+        # run() instead so the failure is per-job and visible.
+        self.trainer_cls = type(self).trainer_cls  # may be None
 
     async def run(self, ctx: JobContext) -> ProcessorResult:
         cfg = ctx.config
@@ -316,25 +337,27 @@ class GsplatProcessor(Processor):
         ctx.check_cancel()
 
         inputs = await self._resolve_inputs(ctx, cfg)
-        trainer = self.trainer_cls()
-        # Surface the simulated trainer to the user — the metrics it emits
-        # look real but aren't. The real CUDA trainer (Phase 1) is selected
-        # automatically when the `gsplat` package is importable.
-        if isinstance(trainer, SimulatedSplatTrainer):
-            await ctx.publish(
-                JobEvent(
-                    job_id=ctx.job_id,
-                    stage="system",
-                    level="warn",
-                    message=(
-                        "gsplat: simulated trainer — output is a placeholder, "
-                        "PSNR / loss numbers are synthetic. Install the real "
-                        "`gsplat` package in worker/Dockerfile.gs for real "
-                        "training."
-                    ),
-                    data={"simulated": True},
+
+        # Resolve the trainer here. If a test pinned `trainer_cls`
+        # ahead of time we use that; otherwise the production
+        # selector either returns `GsplatCudaTrainer` or raises
+        # `GsplatTrainerUnavailableError` with install instructions.
+        trainer_cls = self.trainer_cls
+        if trainer_cls is None:
+            try:
+                trainer_cls = select_trainer_cls()
+            except GsplatTrainerUnavailableError as exc:
+                await ctx.publish(
+                    JobEvent(
+                        job_id=ctx.job_id,
+                        stage="system",
+                        level="error",
+                        message=str(exc),
+                        data={"missing_dep": "gsplat"},
+                    )
                 )
-            )
+                raise
+        trainer = trainer_cls()
         await asyncio.to_thread(trainer.prepare, inputs, cfg)
         await ctx.publish(
             JobEvent(
@@ -407,8 +430,10 @@ class GsplatProcessor(Processor):
         }
         if last_log is not None:
             extras.update(final_psnr=last_log.psnr, final_iter=last_log.iter)
-        if isinstance(trainer, SimulatedSplatTrainer):
-            extras["simulated"] = True
+        # `simulated=True` extras flag dropped along with the silent
+        # fallback path. Tests that drive the simulated trainer
+        # explicitly via `processor.trainer_cls = SimulatedSplatTrainer`
+        # can read isinstance themselves if they care.
         return ProcessorResult(artifacts=artifacts, extras=extras)
 
     # ------------------------------------------------------------------

@@ -42,13 +42,27 @@ def _resolve_cls(backend_id: str) -> type[SlamSession]:
         return select_session_cls()
     if backend_id == "monogs":
         # MonoGS lives under app/processors/gsplat/ but exposes the
-        # SlamSession contract — its draw is producing a Gaussian Splat
-        # while it tracks, which is the headline reason a user reaches
-        # for the live-capture flow in the first place. Same auto-
-        # select pattern as the SLAM backends: real CUDA when
-        # importable, simulated otherwise.
-        from app.processors.gsplat.monogs import select_session_cls
-        return select_session_cls()
+        # SlamSession contract. The production gsplat-side resolver
+        # now raises rather than falling back to simulated (so the
+        # post-stop reconstruction job can't ship synthetic-looking
+        # output as the final result). For the *live preview* in the
+        # api container — which has no GPU and never could run real
+        # MonoGS regardless — we still need a placeholder to keep the
+        # PiP canvas + diagnostic chip moving. The captured frames
+        # get re-processed by the real worker-gs MonoGS on stop, so
+        # the live preview being approximate is fine; only the final
+        # job's artifacts need to be real, and the production path
+        # enforces that.
+        from app.processors.gsplat.monogs import (
+            MonogsSessionUnavailableError,
+            _MonogsSession,
+            select_session_cls,
+        )
+
+        try:
+            return select_session_cls()
+        except MonogsSessionUnavailableError:
+            return _MonogsSession
     # Unknown backend → simulated. Captures still produce a poseable
     # result, just without real reconstruction quality.
     from app.processors.slam.tracker import SimulatedSlamSession

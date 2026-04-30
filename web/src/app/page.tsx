@@ -36,6 +36,28 @@ import {
   type SlamBackend,
   type SlamConfig,
 } from "@/lib/types";
+import type { CaptureBackend } from "@/lib/api";
+
+/** Map the home page's currently-selected mode + backend onto the
+ *  capture-page backend dropdown so a user who picks "Gaussian Splat
+ *  → MonoGS" then taps `capture →` lands on /capture with monogs
+ *  pre-selected (no need to re-pick what they already chose).
+ *
+ *  Lingbot doesn't have a live-SLAM equivalent — the lingbot model
+ *  is feed-forward over a finished video. Default those users to
+ *  mast3r-slam, the most-conservative real backend.
+ *  Likewise "gsplat from source" is a chained training run with no
+ *  live phase; default that case to monogs since the user is in the
+ *  splat-mode mindset already. */
+function captureBackendForCurrentMode(
+  mode: StudioMode,
+  slamBackend: SlamBackend,
+  gsplatBackend: GsplatBackend,
+): CaptureBackend {
+  if (mode === "slam") return slamBackend;
+  if (mode === "gsplat") return "monogs";
+  return "mast3r_slam";
+}
 
 export default function Home() {
   const router = useRouter();
@@ -310,7 +332,7 @@ export default function Home() {
                         or capture live from a phone / webcam
                       </span>
                       <a
-                        href="/capture"
+                        href={`/capture?backend=${captureBackendForCurrentMode(mode, slamBackend, gsplatBackend)}`}
                         style={{
                           padding: "4px 10px",
                           border: "1px solid var(--rule)",

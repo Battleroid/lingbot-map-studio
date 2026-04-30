@@ -1,27 +1,40 @@
 "use client";
 
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas } from "@react-three/fiber";
 import { Bounds, OrbitControls } from "@react-three/drei";
-import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import * as THREE from "three";
 
+import { CameraOverlayAR } from "@/components/capture/CameraOverlayAR";
 import { CameraStream } from "@/components/capture/CameraStream";
 import {
   CoverageVoxels,
   useCoverageSummary,
 } from "@/components/capture/CoverageVoxels";
-import { SplatLayer } from "@/components/Viewer/SplatLayer";
+import { FollowPoseCamera } from "@/components/capture/FollowPoseCamera";
 import {
   startCaptureSession,
   stopCaptureSession,
   type CaptureBackend,
 } from "@/lib/api";
-import {
-  useCaptureStore,
-  VIEW_COVERAGE_AZ_BUCKETS,
-  VIEW_COVERAGE_EL_BUCKETS,
-} from "@/lib/captureSession";
+import { useCaptureStore } from "@/lib/captureSession";
+
+/** Type-guard for the `?backend=` query param. Anything outside the
+ *  dropdown's supported set falls back to the default; we don't want
+ *  a stale link `/capture?backend=foo` to crash the page or push an
+ *  invalid value into the API. */
+function isCaptureBackend(s: string | null | undefined): s is CaptureBackend {
+  return (
+    s === "mast3r_slam" || s === "droid_slam" || s === "dpvo" || s === "monogs"
+  );
+}
 
 const CAPTURE_BUTTON_STYLE: CSSProperties = {
   padding: "12px 24px",
@@ -47,9 +60,29 @@ const CAPTURE_BUTTON_STYLE: CSSProperties = {
  * tile + the gsplat-from-source tile. The existing batch-upload
  * pipeline is unchanged; this just adds a streaming alternative.
  */
+/** Public default export. Wraps the real component in `<Suspense>`
+ *  so `useSearchParams()` is allowed under Next 14's static prerender
+ *  rules — without the boundary the build bails with
+ *  `useSearchParams() should be wrapped in a suspense boundary`. */
 export default function CapturePage() {
+  return (
+    <Suspense fallback={null}>
+      <CapturePageInner />
+    </Suspense>
+  );
+}
+
+function CapturePageInner() {
   const router = useRouter();
-  const [backend, setBackend] = useState<CaptureBackend>("mast3r_slam");
+  // Pre-select the backend the user picked on the home page so they
+  // don't have to re-pick it here. Validates against the supported
+  // dropdown values; an unrecognised query falls back to the default.
+  const searchParams = useSearchParams();
+  const backendFromQuery = searchParams?.get("backend");
+  const initialBackend: CaptureBackend = isCaptureBackend(backendFromQuery)
+    ? backendFromQuery
+    : "mast3r_slam";
+  const [backend, setBackend] = useState<CaptureBackend>(initialBackend);
   const [deviceId, setDeviceId] = useState<string | undefined>(undefined);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [busy, setBusy] = useState<"start" | "stop" | null>(null);
@@ -65,7 +98,6 @@ export default function CapturePage() {
   const reconnectAttempt = useCaptureStore((s) => s.reconnectAttempt);
   const framesSent = useCaptureStore((s) => s.framesSent);
   const framesDroppedClient = useCaptureStore((s) => s.framesDroppedClient);
-  const latestSplatPreview = useCaptureStore((s) => s.latestSplatPreview);
   const videoReady = useCaptureStore((s) => s.videoReady);
   const videoSize = useCaptureStore((s) => s.videoSize);
   const log = useCaptureStore((s) => s.log);
@@ -204,15 +236,17 @@ export default function CapturePage() {
           fps={10}
           deviceId={deviceId}
         />
-        {/* Scaniverse-style coverage strips. Top: azimuth (where you
-         *  panned left-right). Side: elevation (up-down). Covered
-         *  buckets render with a black/white diagonal pattern,
-         *  uncovered with translucent red, and a small cursor marks
-         *  the live view direction. The strips are *not* a
-         *  pixel-aligned AR overlay — that needs lens calibration we
-         *  don't have — but they capture the same panning-feedback
-         *  loop without the alignment work. */}
-        {capturing && <CoverageCompassStrips />}
+        {/* Scaniverse-style 3D coverage overlay. A transparent
+         *  three.js Canvas mounted over the video element with its
+         *  camera locked to the live SLAM pose. Captured cells render
+         *  with a world-space diagonal-stripe shader; an immediately-
+         *  adjacent shell of uncovered cells renders translucent
+         *  red. As the user pans into the red regions the SLAM
+         *  tracker fills the bins and they flip to stripes — same
+         *  panning-feedback loop as Scaniverse. Replaces the prior
+         *  compass-strip approximation, which surfaced direction
+         *  coverage as 1D bars and didn't carry the spatial cue. */}
+        {capturing && <CameraOverlayAR />}
       </div>
 
       {/* Coverage canvas. PiP on portrait (top-left, 35% × 35%);
@@ -231,28 +265,14 @@ export default function CapturePage() {
             // position+quaternion straight from the latest pose.
             <>
               <CoverageVoxels />
-              {latestSplatPreview ? (
-                <SplatLayer url={latestSplatPreview} />
-              ) : (
-                <CapturePointCloud />
-              )}
+              <CapturePointCloud />
               <CaptureFrustum />
               <FollowPoseCamera />
             </>
           ) : (
             <Bounds margin={1.4} observe>
               <CoverageVoxels />
-              {/* Splat preview when the server has written one;
-                  otherwise fall back to the raw point cloud so the
-                  user always sees *something* growing. SplatLayer
-                  renders the same xyz positions as gaussians, so once
-                  the first splat snapshot arrives (~2 s in) we hide
-                  the points to avoid double-render. */}
-              {latestSplatPreview ? (
-                <SplatLayer url={latestSplatPreview} />
-              ) : (
-                <CapturePointCloud />
-              )}
+              <CapturePointCloud />
               <CaptureFrustum />
             </Bounds>
           )}
@@ -377,10 +397,11 @@ export default function CapturePage() {
           <option value="mast3r_slam">mast3r-slam (default)</option>
           <option value="droid_slam">droid-slam</option>
           <option value="dpvo">dpvo</option>
-          {/* MonoGS: produces a real Gaussian Splat as it tracks. The
-              capture session feeds it the same frame stream + writes
-              a live splat preview to disk, which the canvas above
-              renders via SplatLayer. */}
+          {/* MonoGS: the captured frames are queued for real CUDA
+              MonoGS reconstruction in worker-gs after stop. The live
+              session in this api process is just a pose-tracker for
+              the AR coverage overlay; the splat itself is generated
+              post-stop on the GPU worker. */}
           <option value="monogs">monogs (gaussian splat)</option>
         </select>
         {devices.length > 1 && (
@@ -503,7 +524,6 @@ export default function CapturePage() {
               framesProcessed: stats.frames,
               framesDroppedServer: stats.dropped,
               pointsCount,
-              hasSplatPreview: latestSplatPreview != null,
             });
             const body = log
               .map(
@@ -723,7 +743,6 @@ function formatLogHeader(state: {
   framesProcessed: number;
   framesDroppedServer: number;
   pointsCount: number;
-  hasSplatPreview: boolean;
 }): string {
   const lines = [
     `# vid3d capture log @ ${new Date().toISOString()}`,
@@ -732,7 +751,7 @@ function formatLogHeader(state: {
     `ws: ${state.status}${state.reconnectAttempt > 0 ? ` (retry ${state.reconnectAttempt})` : ""}`,
     `frames sent=${state.framesSent} dropped(client)=${state.framesDroppedClient}`,
     `frames processed=${state.framesProcessed} dropped(server)=${state.framesDroppedServer}`,
-    `points=${state.pointsCount} splat-preview=${state.hasSplatPreview ? "yes" : "no"}`,
+    `points=${state.pointsCount}`,
   ];
   return lines.join("\n");
 }
@@ -914,157 +933,6 @@ function InsecureContextNotice() {
       </div>
     </div>
   );
-}
-
-/** Two strips overlaid on the live camera feed showing where the
- *  phone has been pointed: the top strip is azimuth (pan left-right),
- *  the side strip is elevation (tilt up-down). Each cell is one
- *  10° bucket; covered cells show a black/white diagonal pattern,
- *  uncovered cells show translucent red, and a cursor marks the
- *  current view direction so the user knows which red region
- *  they'd fill in by panning toward it. Scaniverse-style intent
- *  without the AR alignment cost — strips can't *misalign* with
- *  the world the way a projected voxel overlay would when our 60°
- *  HFOV approximation is wrong. */
-function CoverageCompassStrips() {
-  const coverage = useCaptureStore((s) => s.viewCoverage);
-  const curAz = useCaptureStore((s) => s.viewCoverageCurrentAz);
-  const curEl = useCaptureStore((s) => s.viewCoverageCurrentEl);
-
-  // Reduce 2D grid to two 1D strips: azimuth = OR across all
-  // elevations at each azimuth column, elevation = OR across all
-  // azimuths at each elevation row. So the azimuth strip is "have I
-  // pointed here at any elevation?" — exactly the panning-feedback
-  // signal Scaniverse surfaces in its outer ring.
-  const azCovered = useMemo(() => {
-    const out = new Uint8Array(VIEW_COVERAGE_AZ_BUCKETS);
-    for (let el = 0; el < VIEW_COVERAGE_EL_BUCKETS; el++) {
-      for (let az = 0; az < VIEW_COVERAGE_AZ_BUCKETS; az++) {
-        if (coverage[el * VIEW_COVERAGE_AZ_BUCKETS + az] > 0) out[az] = 1;
-      }
-    }
-    return out;
-  }, [coverage]);
-  const elCovered = useMemo(() => {
-    const out = new Uint8Array(VIEW_COVERAGE_EL_BUCKETS);
-    for (let el = 0; el < VIEW_COVERAGE_EL_BUCKETS; el++) {
-      for (let az = 0; az < VIEW_COVERAGE_AZ_BUCKETS; az++) {
-        if (coverage[el * VIEW_COVERAGE_AZ_BUCKETS + az] > 0) {
-          out[el] = 1;
-          break;
-        }
-      }
-    }
-    return out;
-  }, [coverage]);
-
-  // Inline CSS-gradient cell renderer. Shipping the diagonal pattern
-  // as a `repeating-linear-gradient` rather than a PNG keeps it a
-  // pure CSS asset that scales at any DPI without an extra fetch.
-  const COVERED_BG =
-    "repeating-linear-gradient(45deg, #1a1a1a 0 5px, #f8f8f8 5px 10px)";
-  const UNCOVERED_BG = "rgba(232, 89, 58, 0.45)";
-
-  return (
-    <>
-      {/* Azimuth strip — top of the camera view. Honours iOS notch /
-       *  status-bar inset so it doesn't get clipped. */}
-      <div
-        style={{
-          position: "absolute",
-          top: "max(8px, env(safe-area-inset-top))",
-          left: 12,
-          right: 12,
-          height: 14,
-          display: "flex",
-          gap: 1,
-          borderRadius: 3,
-          overflow: "hidden",
-          opacity: 0.9,
-          pointerEvents: "none",
-        }}
-        aria-label="azimuth coverage"
-      >
-        {Array.from({ length: VIEW_COVERAGE_AZ_BUCKETS }).map((_, i) => (
-          <div
-            key={i}
-            style={{
-              flex: 1,
-              background: azCovered[i] ? COVERED_BG : UNCOVERED_BG,
-              outline:
-                i === curAz ? "2px solid #ffd166" : "1px solid rgba(0,0,0,0.4)",
-              outlineOffset: i === curAz ? -2 : -1,
-              zIndex: i === curAz ? 2 : 1,
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Elevation strip — left edge. Stacks bottom-up so the lowest
-       *  cell renders at the bottom of the screen (looking down) and
-       *  the topmost cell at the top (looking up), matching the
-       *  user's spatial intuition. */}
-      <div
-        style={{
-          position: "absolute",
-          // Match the safe-area awareness of the azimuth strip + the
-          // bottom-anchor of the diagnostic chip so the strip doesn't
-          // overlap either.
-          top: "calc(max(8px, env(safe-area-inset-top)) + 22px)",
-          bottom:
-            "max(140px, calc(env(safe-area-inset-bottom) + 140px))",
-          left: 12,
-          width: 14,
-          display: "flex",
-          flexDirection: "column-reverse",
-          gap: 1,
-          borderRadius: 3,
-          overflow: "hidden",
-          opacity: 0.9,
-          pointerEvents: "none",
-        }}
-        aria-label="elevation coverage"
-      >
-        {Array.from({ length: VIEW_COVERAGE_EL_BUCKETS }).map((_, i) => (
-          <div
-            key={i}
-            style={{
-              flex: 1,
-              background: elCovered[i] ? COVERED_BG : UNCOVERED_BG,
-              outline:
-                i === curEl ? "2px solid #ffd166" : "1px solid rgba(0,0,0,0.4)",
-              outlineOffset: i === curEl ? -2 : -1,
-              zIndex: i === curEl ? 2 : 1,
-            }}
-          />
-        ))}
-      </div>
-    </>
-  );
-}
-
-/** Drives the canvas camera from the latest SLAM pose so the PiP
- *  shows the splat from the user's *current* viewpoint, not a fixed
- *  orbit. Skips when no poses have arrived yet — leaves the default
- *  camera position so the canvas isn't blank during the warmup. */
-function FollowPoseCamera() {
-  const poses = useCaptureStore((s) => s.poses);
-  // useThree gives us the live camera the Canvas mounted; useFrame
-  // would also work but per-frame setStates pile up during the SLAM
-  // gaps. Updating in an effect on the latest pose change is enough.
-  const camera = useThree((s) => s.camera);
-
-  useEffect(() => {
-    if (poses.length === 0) return;
-    const latest = poses[poses.length - 1];
-    const [tx, ty, tz] = latest.t;
-    const [qx, qy, qz, qw] = latest.q;
-    camera.position.set(tx, ty, tz);
-    camera.quaternion.set(qx, qy, qz, qw);
-    camera.updateMatrixWorld();
-  }, [poses, camera]);
-
-  return null;
 }
 
 /** Renders the latest pose as a small frustum so the user can read

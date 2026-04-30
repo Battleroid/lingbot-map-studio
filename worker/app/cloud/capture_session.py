@@ -53,10 +53,6 @@ log = logging.getLogger(__name__)
 # GPU forever. Refreshed every time the client sends a frame.
 _IDLE_TIMEOUT_S = 60.0
 
-# Minimum gap between splat-preview writes. ~2 s is fast enough that
-# the user sees the splat fill out as they pan but slow enough that
-# the PLY write doesn't crowd out a SLAM step's wall-clock budget.
-_PREVIEW_MIN_INTERVAL_S = 2.0
 
 
 @dataclass
@@ -122,13 +118,6 @@ class CaptureSession:
         self.job_dir: Path = settings.job_dir(self.job_id)
         self.frames_dir: Path = self.job_dir / "frames"
         self.artifacts_dir: Path = self.job_dir / "artifacts"
-        # Live-preview splat sits under the same job dir so it's
-        # reachable via `/api/capture/{session_id}/preview/splat.ply`
-        # while the session is live; the file gets superseded by the
-        # worker's real splat output when the queued job runs.
-        self.preview_dir: Path = self.job_dir / "preview"
-        self._last_preview_emit_t: float = 0.0
-        self._preview_count: int = 0
 
     async def start(self) -> None:
         """Pick the SLAM backend + spawn the frame-processing task."""
@@ -137,20 +126,9 @@ class CaptureSession:
         self._slam_session = resolve_live_session(self.backend)
         # Pre-create the on-disk layout. `frames/` will be filled
         # frame-by-frame as the WS receives them; the worker that
-        # eventually claims this job reads from there. `preview/`
-        # holds the live splat snapshot the live UI fetches.
+        # eventually claims this job reads from there.
         self.frames_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        self.preview_dir.mkdir(parents=True, exist_ok=True)
-        if hasattr(self._slam_session, "set_artifact_dir"):
-            try:
-                self._slam_session.set_artifact_dir(self.preview_dir)
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "capture_session %s: set_artifact_dir failed (%s)",
-                    self.id,
-                    exc,
-                )
         await self._emit("ready", {"backend": self.backend})
         self._task = asyncio.create_task(self._run())
 
@@ -276,12 +254,6 @@ class CaptureSession:
                 # don't redraw the chip on every step.
                 if self._frame_count <= 5 or self._frame_count % 10 == 0:
                     await self._emit_stats()
-
-                # Live splat preview — keeps the user oriented during
-                # the scan ("have I covered this corner of the room
-                # yet?"). Throttled to ~1/2 s wall-clock so writing
-                # the PLY doesn't compete with SLAM step time.
-                await self._maybe_emit_splat_preview()
         except Exception as exc:  # noqa: BLE001
             log.warning("capture_session %s loop raised: %s", self.id, exc)
             await self._emit("error", {"message": str(exc)})
@@ -321,68 +293,6 @@ class CaptureSession:
                 "frames": self._frame_count,
                 "queued": self.frame_queue.qsize(),
                 "dropped": self._dropped,
-            },
-        )
-
-    async def _maybe_emit_splat_preview(self) -> None:
-        """Periodically dump the current sparse cloud as a minimal
-        Gaussian-splat-flavoured PLY so the capture page can render it
-        as a growing splat preview instead of (or alongside) the raw
-        point cloud.
-
-        Throttled to one write per `_PREVIEW_MIN_INTERVAL_S` wall-clock
-        seconds. The write is in a thread because numpy concat + file
-        write blocks the event loop otherwise, and a phone scan can
-        accumulate tens of thousands of points pretty quickly.
-
-        The splat snapshot is the same minimal-property layout MonoGS
-        produces (xyz + log-scale + opacity + uchar RGB) so the
-        existing `SplatLayer` parser handles it without a code path
-        per-source. When MonoGS later finalizes its real splat the
-        finalize-to-disk step copies the higher-fidelity file over
-        the top so the captured *job* has the proper output."""
-        now = time.monotonic()
-        if now - self._last_preview_emit_t < _PREVIEW_MIN_INTERVAL_S:
-            return
-        if not self._points_buffer:
-            return
-        self._last_preview_emit_t = now
-        # Inline copy of the points so the writer thread doesn't race
-        # against further appends from `_run`.
-        snapshot = list(self._points_buffer)
-
-        def _write() -> int:
-            from app.processors.gsplat.monogs import _write_minimal_splat_ply
-
-            try:
-                points = np.concatenate(snapshot, axis=0)
-            except ValueError:
-                return 0
-            if points.size == 0:
-                return 0
-            self.preview_dir.mkdir(parents=True, exist_ok=True)
-            _write_minimal_splat_ply(self.preview_dir / "splat.ply", points)
-            return int(points.shape[0])
-
-        try:
-            n_pts = await asyncio.to_thread(_write)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "capture_session %s: splat preview write failed (%s)",
-                self.id,
-                exc,
-            )
-            return
-        if n_pts == 0:
-            return
-        self._preview_count += 1
-        await self._emit(
-            "partial_splat",
-            {
-                "name": "splat.ply",
-                "kind": "partial_splat",
-                "preview": self._preview_count,
-                "n_points": n_pts,
             },
         )
 
