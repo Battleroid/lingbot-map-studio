@@ -50,6 +50,31 @@ export default function CapturePage() {
   const capturing = status === "open";
   const summary = useCoverageSummary();
 
+  // Detect insecure context client-side. `window.isSecureContext` is the
+  // exact gate `getUserMedia` checks: localhost + HTTPS pass, plain
+  // http://<lan-ip> doesn't. Without this check the user lands on a
+  // black page that silently does nothing when they tap start (the
+  // camera permission prompt never appears because `mediaDevices` is
+  // undefined off-secure-context).
+  //
+  // `null` until mounted so SSR matches and we don't flash the wrong
+  // screen during hydration.
+  const [insecure, setInsecure] = useState<boolean | null>(null);
+  useEffect(() => {
+    // Defer past the current render tick so React doesn't treat this
+    // as a synchronous setState-in-effect (cascading-renders lint).
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      const noSecureContext = !window.isSecureContext;
+      const noMediaDevices = !navigator.mediaDevices?.getUserMedia;
+      setInsecure(noSecureContext || noMediaDevices);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Probe the user's available cameras once on mount. enumerateDevices
   // returns deviceIds without labels until the user has granted at
   // least one getUserMedia permission, so this list is shorter on
@@ -75,6 +100,12 @@ export default function CapturePage() {
   // Reset the store when leaving the page so a back-then-return
   // doesn't surface stale state.
   useEffect(() => () => reset(), [reset]);
+
+  // Early-return *after* all hooks so React's hook-order rule is
+  // satisfied across the insecure / secure transitions. (`null` keeps
+  // the page-shell rendering during the first hydration tick — same as
+  // the secure case — so there's no flash.)
+  if (insecure === true) return <InsecureContextNotice />;
 
   async function start() {
     setBusy("start");
@@ -320,6 +351,158 @@ function CapturePointCloud() {
         sizeAttenuation
       />
     </points>
+  );
+}
+
+/** Friendly full-page notice shown when the page is loaded outside a
+ *  secure context (plain http on a non-localhost origin). Without this,
+ *  the user taps Start, the camera prompt never appears (because
+ *  `navigator.mediaDevices` is undefined off secure-context), and they
+ *  have no clue why — the silent-fail mode is the worst possible UX
+ *  for a feature that *only* works behind HTTPS.
+ *
+ *  The notice constructs the suggested HTTPS URL from the current
+ *  origin (drops the port — Caddy listens on the standard 443) and
+ *  links to the README's `make up-https` section for the cert install
+ *  recipe. Same anchor used in the home-page CTA so the docs flow is
+ *  consistent. */
+function InsecureContextNotice() {
+  // One state object so we only fire one setState on mount — keeps
+  // the cascading-render lint rule happy and matches the on-mount
+  // semantics (these values never change after first render).
+  const [loc, setLoc] = useState<{ host: string; httpsUrl: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    // Defer past the current render tick — same reason as the parent's
+    // insecure detection: avoids the synchronous-setState-in-effect lint.
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      const { hostname, pathname, search } = window.location;
+      // Standard 443 — Caddy publishes there. Drop any custom dev port
+      // because the production HTTPS path doesn't carry one.
+      setLoc({
+        host: hostname,
+        httpsUrl: `https://${hostname}${pathname}${search}`,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const host = loc?.host ?? null;
+  const suggestedUrl = loc?.httpsUrl ?? null;
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        padding: 24,
+        background: "#0a0a0a",
+        color: "#fff",
+        fontSize: "var(--fs-md)",
+        lineHeight: 1.5,
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 560,
+          padding: 24,
+          border: "1px solid rgba(255, 255, 255, 0.2)",
+          borderRadius: "var(--r-sm)",
+          background: "rgba(255, 255, 255, 0.03)",
+        }}
+      >
+        <h1
+          style={{
+            margin: 0,
+            marginBottom: 12,
+            fontSize: "var(--fs-lg)",
+            letterSpacing: "0.02em",
+          }}
+        >
+          camera capture needs HTTPS
+        </h1>
+        <p style={{ margin: "0 0 12px" }}>
+          Mobile browsers refuse{" "}
+          <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px" }}>
+            getUserMedia
+          </code>{" "}
+          on plain http unless the page is on{" "}
+          <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px" }}>
+            localhost
+          </code>
+          . The studio supports an opt-in HTTPS path with a one-shot
+          setup; the recipe below gets you scanning in a couple minutes.
+        </p>
+        <ol style={{ margin: "12px 0", paddingLeft: 20 }}>
+          <li style={{ marginBottom: 8 }}>
+            On the studio host, stop the current stack and run{" "}
+            <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px" }}>
+              make up-https
+            </code>
+            . It auto-installs mkcert, trusts a local root CA, generates
+            a cert pair covering this host, and starts Caddy on 443.
+          </li>
+          <li style={{ marginBottom: 8 }}>
+            From this phone, visit{" "}
+            {host ? (
+              <code style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px" }}>
+                http://{host}/mkcert-rootCA.pem
+              </code>
+            ) : (
+              "http://<host>/mkcert-rootCA.pem"
+            )}{" "}
+            and install the file (Settings → Security → Install
+            certificate → CA on Android; General → VPN & Device
+            Management + Certificate Trust Settings on iOS).
+          </li>
+          <li style={{ marginBottom: 8 }}>
+            Reload this page over HTTPS:{" "}
+            {suggestedUrl ? (
+              <a
+                href={suggestedUrl}
+                style={{ color: "#ffd166", textDecoration: "underline" }}
+              >
+                {suggestedUrl}
+              </a>
+            ) : (
+              <span>https://&lt;host&gt;/capture</span>
+            )}
+          </li>
+        </ol>
+        <p
+          style={{
+            margin: "16px 0 0",
+            fontSize: "var(--fs-sm)",
+            opacity: 0.7,
+          }}
+        >
+          Full walkthrough:{" "}
+          <a
+            href="https://github.com/Battleroid/lingbot-map-studio#scanning-from-a-phone--make-up-https"
+            target="_blank"
+            rel="noreferrer noopener"
+            style={{ color: "#ffd166" }}
+          >
+            README → Scanning from a phone
+          </a>
+          . If you already have HTTPS set up but still landed here,{" "}
+          <code
+            style={{ background: "rgba(255,255,255,0.08)", padding: "0 4px" }}
+          >
+            navigator.mediaDevices
+          </code>{" "}
+          may be unavailable in this browser — try a recent Chrome /
+          Safari / Firefox.
+        </p>
+      </div>
+    </div>
   );
 }
 
