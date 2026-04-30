@@ -39,6 +39,21 @@ RUN python -m pip install --upgrade pip setuptools wheel
 # tests + local dev) all eager-import it at module load. Without it, the
 # api container crashes during `app.main` import with `ModuleNotFoundError:
 # No module named 'httpx'`.
+# `opencv-python-headless` is needed by the live-capture WS handler in
+# `app/main.py:capture_stream`, which decodes JPEG frames the phone
+# pushes via `cv2.imdecode`. Lives in the base image rather than
+# Dockerfile.api specifically because:
+#   1. the simulated SLAM tracker (`processors/slam/tracker.py`) also
+#      calls `cv2.cvtColor` / `cv2.calcOpticalFlowFarneback`, and live
+#      capture in the api container falls back to simulated when no
+#      real CUDA backend is importable.
+#   2. the comment in capture_stream explicitly assumes opencv is in
+#      the base ("the api container also has it via the base image").
+#      Fixing the comment by aligning the install site keeps the
+#      assumption true.
+# The slam/gs/remote Dockerfiles still pin the same version
+# explicitly so a future divergence in the base doesn't silently
+# break those images either.
 RUN pip install \
         "fastapi==0.118.0" \
         "uvicorn[standard]==0.32.0" \
@@ -51,7 +66,8 @@ RUN pip install \
         "aiofiles==24.1.0" \
         "numpy<2.3" \
         "huggingface_hub==0.26.2" \
-        "httpx[http2]==0.27.2"
+        "httpx[http2]==0.27.2" \
+        "opencv-python-headless==4.10.0.84"
 
 WORKDIR /app
 COPY pyproject.toml ./

@@ -17,10 +17,7 @@ import {
   stopCaptureSession,
   type CaptureBackend,
 } from "@/lib/api";
-import {
-  MAX_RECONNECT_ATTEMPTS,
-  useCaptureStore,
-} from "@/lib/captureSession";
+import { useCaptureStore } from "@/lib/captureSession";
 
 const CAPTURE_BUTTON_STYLE: CSSProperties = {
   padding: "12px 24px",
@@ -74,7 +71,6 @@ export default function CapturePage() {
   // network blip would flip the UI to "Start" mid-scan, which would
   // erroneously kick off a new session.
   const capturing = status === "open" || reconnectAttempt > 0;
-  const reconnecting = reconnectAttempt > 0 && status !== "open";
   const summary = useCoverageSummary();
 
   // Detect insecure context client-side. `window.isSecureContext` is the
@@ -234,14 +230,21 @@ export default function CapturePage() {
       <div
         style={{
           position: "absolute",
-          top: 12,
+          // Anchored just above the start/stop button rather than the
+          // top-left, where the PiP coverage canvas (35vw × 35vw) was
+          // landing on top of it on phones. This keeps the chip in
+          // the user's eyeline as they pan the camera + leaves the
+          // PiP unobstructed for the splat preview.
+          bottom:
+            "max(88px, calc(env(safe-area-inset-bottom) + 88px))",
           left: 12,
+          right: 12,
           padding: "6px 10px",
-          background: "rgba(10, 10, 10, 0.65)",
+          background: "rgba(10, 10, 10, 0.78)",
           fontSize: "var(--fs-xs)",
           letterSpacing: "0.04em",
           borderRadius: "var(--r-xs)",
-          maxWidth: "calc(100vw - 24px)",
+          textAlign: "center",
         }}
       >
         <div>
@@ -272,23 +275,11 @@ export default function CapturePage() {
         </div>
       </div>
 
-      {reconnecting && (
-        <div
-          style={{
-            position: "absolute",
-            top: 44,
-            left: 12,
-            padding: "6px 10px",
-            background: "rgba(232, 180, 58, 0.85)",
-            color: "#222",
-            fontSize: "var(--fs-xs)",
-            borderRadius: "var(--r-xs)",
-          }}
-          role="status"
-        >
-          reconnecting… (attempt {reconnectAttempt}/{MAX_RECONNECT_ATTEMPTS})
-        </div>
-      )}
+      {/* The reconnecting state is visible inline on the diagnostic
+       *  chip below as `ws: connecting · (retry N)`, which is enough
+       *  signal in the new layout. The dedicated yellow badge that
+       *  used to sit at the top-left got obscured by the PiP coverage
+       *  canvas anyway. */}
 
       <div
         style={{
@@ -384,9 +375,10 @@ export default function CapturePage() {
         <div
           style={{
             position: "absolute",
-            // Sit just above the controls, scaled the same way so
-            // both move together when the safe-area inset is non-zero.
-            bottom: "max(88px, calc(env(safe-area-inset-bottom) + 88px))",
+            // Stacks above the diagnostic chip (which now sits at 88px)
+            // so they don't overlap when both are visible.
+            bottom:
+              "max(140px, calc(env(safe-area-inset-bottom) + 140px))",
             left: 12,
             right: 12,
             padding: "6px 10px",
