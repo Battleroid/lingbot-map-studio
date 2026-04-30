@@ -39,6 +39,20 @@ RUN pip install \
 # source-builds with the CUDA toolkit already present in the base image.
 RUN pip install "gsplat==1.4.0"
 
+# MonoGS upstream pulls in a handful of pure-Python deps that aren't
+# in the base image. The first one we hit at runtime was `munch`
+# (config dict wrapper); `pyyaml` + `imageio` + `lpips` are the next
+# couple so we install them up front rather than discovering them
+# one job-failure at a time. `evo` (trajectory eval) and `wandb`
+# (logging) are intentionally skipped — MonoGS uses them in tools
+# we don't exercise; pulling them in adds ~250 MB of image weight
+# for nothing.
+RUN pip install --no-cache-dir \
+        "munch==4.0.0" \
+        "pyyaml==6.0.1" \
+        "imageio==2.34.2" \
+        "lpips==0.1.4"
+
 # Build deps for MonoGS source build (its 3DGS rasterizer ships its own
 # CUDA extensions).
 RUN apt-get update && apt-get install -y --no-install-recommends \
