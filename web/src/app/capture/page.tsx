@@ -16,7 +16,10 @@ import {
   stopCaptureSession,
   type CaptureBackend,
 } from "@/lib/api";
-import { useCaptureStore } from "@/lib/captureSession";
+import {
+  MAX_RECONNECT_ATTEMPTS,
+  useCaptureStore,
+} from "@/lib/captureSession";
 
 /**
  * Live camera capture page.
@@ -46,8 +49,15 @@ export default function CapturePage() {
   const stats = useCaptureStore((s) => s.stats);
   const pointsCount = useCaptureStore((s) => s.pointsCount);
   const sessionError = useCaptureStore((s) => s.error);
+  const reconnectAttempt = useCaptureStore((s) => s.reconnectAttempt);
 
-  const capturing = status === "open";
+  // "open" or actively retrying — both are flavours of an in-progress
+  // session, so treat them as `capturing` for the purpose of which
+  // button (Start vs Stop) is rendered. Without this a transient
+  // network blip would flip the UI to "Start" mid-scan, which would
+  // erroneously kick off a new session.
+  const capturing = status === "open" || reconnectAttempt > 0;
+  const reconnecting = reconnectAttempt > 0 && status !== "open";
   const summary = useCoverageSummary();
 
   // Detect insecure context client-side. `window.isSecureContext` is the
@@ -192,6 +202,24 @@ export default function CapturePage() {
         {Math.round(summary.ratio * 100)}% covered &middot;{" "}
         {stats.frames} frames {stats.dropped > 0 && `(${stats.dropped} dropped)`}
       </div>
+
+      {reconnecting && (
+        <div
+          style={{
+            position: "absolute",
+            top: 44,
+            left: 12,
+            padding: "6px 10px",
+            background: "rgba(232, 180, 58, 0.85)",
+            color: "#222",
+            fontSize: "var(--fs-xs)",
+            borderRadius: "var(--r-xs)",
+          }}
+          role="status"
+        >
+          reconnecting… (attempt {reconnectAttempt}/{MAX_RECONNECT_ATTEMPTS})
+        </div>
+      )}
 
       <div
         style={{
