@@ -46,6 +46,15 @@ export interface CaptureLogEntry {
  *  the worst-case memory of an all-day capture session at a few KB. */
 const LOG_CAPACITY = 200;
 
+/** Resolution of the view-direction coverage grid. 10° per bucket on
+ *  both axes — coarse enough that a typical pan gesture lights up
+ *  several cells but fine enough that "I missed that corner" is
+ *  visible on the strip. Total cells: 36 az × 18 el = 648. */
+export const VIEW_COVERAGE_AZ_BUCKETS = 36;
+export const VIEW_COVERAGE_EL_BUCKETS = 18;
+const VIEW_COVERAGE_CELLS =
+  VIEW_COVERAGE_AZ_BUCKETS * VIEW_COVERAGE_EL_BUCKETS;
+
 interface CaptureState {
   status: CaptureStatus;
   sessionId: string | null;
@@ -61,6 +70,19 @@ interface CaptureState {
   // is the cumulative count of points landed in that voxel.
   voxelSize: number;
   voxels: Map<string, number>;
+
+  // View-direction coverage (Scaniverse-style "have I pointed there
+  // yet?" feedback). Two flat Uint16Arrays sized `36 × 18` — one
+  // azimuth bucket per 10° (0..360°) crossed with one elevation
+  // bucket per 10° (-90..90°). Each cell holds the number of poses
+  // that landed in that direction. Stored as flat typed arrays
+  // rather than Map<string,number> so the camera-view compass strips
+  // can iterate without per-frame allocation.
+  viewCoverage: Uint16Array;
+  // Index of the current az/el bucket (the cursor on the strips).
+  // -1 means "no pose yet", which the UI renders as a hidden cursor.
+  viewCoverageCurrentAz: number;
+  viewCoverageCurrentEl: number;
 
   stats: CaptureStats;
   error: string | null;
@@ -143,6 +165,9 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   pointsCount: 0,
   voxelSize: 0.1,
   voxels: new Map(),
+  viewCoverage: new Uint16Array(VIEW_COVERAGE_CELLS),
+  viewCoverageCurrentAz: -1,
+  viewCoverageCurrentEl: -1,
   stats: { frames: 0, queued: 0, dropped: 0 },
   error: null,
   framesSent: 0,
@@ -209,6 +234,9 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       pointsRgb: makeRgb(INITIAL_POINT_CAPACITY),
       pointsCount: 0,
       voxels: new Map(),
+      viewCoverage: new Uint16Array(VIEW_COVERAGE_CELLS),
+      viewCoverageCurrentAz: -1,
+      viewCoverageCurrentEl: -1,
       stats: { frames: 0, queued: 0, dropped: 0 },
       error: null,
       framesSent: 0,
@@ -399,6 +427,7 @@ function connectWs(
       if (msg.type === "pose") {
         const pose = msg.data as unknown as CapturePose;
         set((s) => ({ poses: [...s.poses, pose] }));
+        markViewCoverageFromPose(pose, get, set);
       } else if (msg.type === "points") {
         const rows = (msg.data["new"] as number[][]) || [];
         appendPoints(rows, get, set);
@@ -500,3 +529,63 @@ function appendPoints(
 /** Number of reconnect attempts the store will make before giving up.
  *  Exposed for the UI to render `reconnecting (n/N)…`. */
 export const MAX_RECONNECT_ATTEMPTS = RECONNECT_DELAYS_MS.length;
+
+/** Update the view-direction coverage grid from a freshly-arrived
+ *  pose. The pose's quaternion (xyzw) gets rotated through the
+ *  camera's forward vector (-Z in three.js / OpenGL convention),
+ *  the result is converted to azimuth + elevation in degrees, and
+ *  the matching grid cell's count is bumped.
+ *
+ *  The arithmetic stays inline rather than pulling in a quaternion
+ *  library: a single quaternion-times-vector op is six multiplies +
+ *  five adds; bringing in three.js' Quaternion class for it would
+ *  be heavier than the call site warrants. */
+function markViewCoverageFromPose(
+  pose: CapturePose,
+  get: () => CaptureState,
+  set: (
+    partial:
+      | Partial<CaptureState>
+      | ((s: CaptureState) => Partial<CaptureState>),
+  ) => void,
+): void {
+  const [qx, qy, qz, qw] = pose.q;
+  // Rotate the camera-forward vector (0, 0, -1) by the pose quat to
+  // get its world-space heading. Standard formula: v' = q * v * q*.
+  const fx = -2 * (qx * qz + qw * qy);
+  const fy = -2 * (qy * qz - qw * qx);
+  const fz = -(1 - 2 * (qx * qx + qy * qy));
+  const len = Math.hypot(fx, fy, fz) || 1;
+  const nx = fx / len;
+  const ny = fy / len;
+  const nz = fz / len;
+  // azimuth: atan2(x, -z) so 0° = forward, +x is right (clockwise
+  // when viewed from above). Elevation: asin(y).
+  const azDeg = (Math.atan2(nx, -nz) * 180) / Math.PI;
+  const elDeg = (Math.asin(Math.max(-1, Math.min(1, ny))) * 180) / Math.PI;
+  // Bucketize. azimuth wrapped into [0, 360); elevation clamped to
+  // [-90, 90] then mapped to [0, EL_BUCKETS).
+  const az = ((azDeg % 360) + 360) % 360;
+  const azIdx = Math.min(
+    VIEW_COVERAGE_AZ_BUCKETS - 1,
+    Math.floor((az / 360) * VIEW_COVERAGE_AZ_BUCKETS),
+  );
+  const elIdx = Math.min(
+    VIEW_COVERAGE_EL_BUCKETS - 1,
+    Math.max(
+      0,
+      Math.floor(((elDeg + 90) / 180) * VIEW_COVERAGE_EL_BUCKETS),
+    ),
+  );
+  const flat = elIdx * VIEW_COVERAGE_AZ_BUCKETS + azIdx;
+  const prev = get().viewCoverage;
+  // Copy-on-write so subscribers that compare by reference re-render.
+  // 648 × Uint16 = ~1.3 KB — cheap to clone per pose.
+  const next = new Uint16Array(prev);
+  if (next[flat] < 0xffff) next[flat] = next[flat] + 1;
+  set({
+    viewCoverage: next,
+    viewCoverageCurrentAz: azIdx,
+    viewCoverageCurrentEl: elIdx,
+  });
+}
