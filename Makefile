@@ -103,10 +103,23 @@ up-build: .env ## build images from source + start (slow first run)
 # IP). The bootstrap re-runs automatically when scripts/mkcert-bootstrap.sh
 # is edited.
 up-https: .env caddy/certs/cert.pem ## start with HTTPS via Caddy + mkcert (one-shot, no prep)
+	@# Clean out any orphan containers / stale network refs from a
+	@# previous run before building. Without this, switching between
+	@# `make up` and `make up-https` (or interrupting a previous
+	@# up-https mid-flight) leaves containers still pointing at a
+	@# network ID Docker has since GC'd, which surfaces as
+	@# `failed to set up container networking: network <hash> not found`.
+	@# `down` without `--profile` tears down every container in the
+	@# project regardless of which profile started it; the
+	@# `--remove-orphans` belt-and-suspenders catches services that
+	@# left the compose file (or moved between profiles) since the
+	@# last run. Volumes are preserved (no `-v`) so the sqlite db,
+	@# models cache, and uploaded clips survive.
+	-$(COMPOSE) down --remove-orphans 2>/dev/null
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile build build base
 	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https build web caddy
 	@$(MAKE) -s up-https-summary
-	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https up
+	NEXT_PUBLIC_API_BASE= $(COMPOSE) --profile https up --remove-orphans
 
 # Cert bootstrap. Make picks this up as a prereq for up-https + only
 # runs it when caddy/certs/cert.pem is missing OR older than the
