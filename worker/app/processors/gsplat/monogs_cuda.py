@@ -87,33 +87,65 @@ def _quat_xyzw_translate_to_matrix(pose_7: np.ndarray) -> np.ndarray:
     return M
 
 
+_REQUIRED_DRIVER_METHODS = ("process_frame", "track", "step")
+
+
 def _resolve_mapper_cls():
-    """Probe the upstream module for the GaussianMapper-equivalent
-    class. MonoGS isn't a pip-installable package (no proper
-    setup.py); the Dockerfile mounts the source dir at /opt/monogs and
-    sets PYTHONPATH so the top-level `gaussian_splatting.*` modules
-    are importable. The exact class location varies between commits;
-    probe a few likely paths."""
+    """Probe the upstream module for a streaming SLAM driver class.
+
+    The upstream `muskie82/MonoGS` repository does NOT actually expose a
+    per-frame streaming API. Its top-level entrypoint is `slam.SLAM`,
+    which expects a config dict + a Dataset and runs frontend / backend
+    as separate `multiprocessing.Process` instances driven internally —
+    there's no `process_frame(idx, img, K)` method to call from a queue
+    loop, and no public way to feed frames in one at a time without
+    standing up the dataset + queue plumbing ourselves.
+
+    This probe used to fall through to
+    `gaussian_splatting.scene.gaussian_model.GaussianModel`, which is
+    the splat data structure (it requires `sh_degree` at __init__ and
+    has no SLAM driver methods) — so `start()` would crash with
+    `TypeError: GaussianModel.__init__() missing 1 required positional
+    argument: 'sh_degree'`. We now reject anything that doesn't
+    actually look like a streaming driver, and raise a clear error
+    instead — `select_session_cls()` then surfaces it as
+    `MonogsSessionUnavailableError` and the strict-no-simulated path
+    fires (live preview falls back to simulated; post-stop reconstruct
+    fails loud).
+
+    A real adapter would need to either:
+      (a) build a frame-queue Dataset + drive the upstream
+          frontend/backend process pair from our async loop, or
+      (b) generate a TUM-shaped on-disk dataset from the captured
+          frames + subprocess-run upstream `slam.py --config <yaml>`.
+
+    Neither shortcut is in the tree yet; this resolver's job is to
+    fail loudly until one lands rather than crashing mid-frame."""
     candidates = [
-        # Most upstream forks expose the mapper at one of these.
         ("gaussian_splatting.scene", "GaussianMapper"),
-        ("gaussian_splatting.scene.gaussian_model", "GaussianModel"),
-        # Some forks rename the project's top module.
         ("monogs.gaussian_splatting.scene", "GaussianMapper"),
         ("monogs.scene", "GaussianMapper"),
         ("monogs.tracker", "MonogsTracker"),
-        ("slam", "SLAM"),
     ]
-    last_exc: Optional[Exception] = None
+    rejected: list[str] = []
     for module_path, attr in candidates:
         try:
             mod = __import__(module_path, fromlist=[attr])
-            return getattr(mod, attr)
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
+            cls = getattr(mod, attr)
+        except Exception:  # noqa: BLE001
+            continue
+        if not any(hasattr(cls, m) for m in _REQUIRED_DRIVER_METHODS):
+            rejected.append(f"{module_path}.{attr} (no streaming driver methods)")
+            continue
+        return cls
     raise ImportError(
-        f"could not locate MonoGS mapper class in {[c[0] + '.' + c[1] for c in candidates]}: "
-        f"{last_exc!r}"
+        "MonoGS streaming SLAM is not implemented in this build. Upstream "
+        "muskie82/MonoGS exposes only a multi-process batch entrypoint "
+        "(`slam.SLAM(config)`) — there is no `process_frame` / `step` API "
+        "to drive from a frame queue. Pick a streaming SLAM backend "
+        "(mast3r_slam / droid_slam / dpvo) for the capture pass; gsplat "
+        "training can run as a follow-up job from the resulting frames. "
+        f"(probed candidates: rejected={rejected})"
     )
 
 

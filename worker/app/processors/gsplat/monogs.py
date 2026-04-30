@@ -131,20 +131,18 @@ def select_session_cls() -> type[SlamSession]:
             "passthrough; check the worker-gs container's "
             "deploy.resources.reservations.devices in docker-compose.yml."
         )
-    try:
-        # MonoGS isn't a pip-installable package — the Dockerfile clones
-        # the source into /opt/monogs and adds it to PYTHONPATH. Probe
-        # a couple of likely top-level imports; the CUDA session's
-        # `_resolve_mapper_cls` does the deeper class probe.
-        import importlib  # noqa: PLC0415
+    # MonoGS isn't a pip-installable package — the Dockerfile clones
+    # the source into /opt/monogs and adds it to PYTHONPATH. Probe a
+    # couple of likely top-level imports.
+    import importlib  # noqa: PLC0415
 
+    try:
         try:
             importlib.import_module("gaussian_splatting")
         except ImportError:
             # Fall back to the legacy probe — some forks namespace
             # everything under `monogs`.
             importlib.import_module("monogs")
-        from app.processors.gsplat.monogs_cuda import MonogsCudaSession  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         raise MonogsSessionUnavailableError(
             "monogs: the upstream MonoGS source isn't importable in "
@@ -152,6 +150,24 @@ def select_session_cls() -> type[SlamSession]:
             "should `git clone` it into /opt/monogs and add that path "
             "to PYTHONPATH; see worker/Dockerfile.gs."
         ) from exc
+
+    # Run the deep probe NOW (not at first frame) so the resolver
+    # surfaces "no streaming driver in upstream" as an availability
+    # error here, instead of crashing inside `MonogsCudaSession.start`
+    # mid-job with a `TypeError: GaussianModel.__init__() missing
+    # 1 required positional argument: 'sh_degree'` (which is what
+    # happens when the speculative probe falls through to the splat
+    # data class). The resolver returns a class with one of
+    # process_frame / track / step or raises ImportError with an
+    # explanation of why streaming MonoGS isn't actually wired up.
+    from app.processors.gsplat.monogs_cuda import (  # noqa: PLC0415
+        MonogsCudaSession,
+        _resolve_mapper_cls,
+    )
+    try:
+        _resolve_mapper_cls()
+    except Exception as exc:  # noqa: BLE001
+        raise MonogsSessionUnavailableError(str(exc)) from exc
     return MonogsCudaSession
 
 
