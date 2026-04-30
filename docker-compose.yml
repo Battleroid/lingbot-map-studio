@@ -18,7 +18,17 @@ services:
       dockerfile: Dockerfile.api
       args:
         BASE_IMAGE: lingbot-studio/base:latest
+    # GPU passthrough so the live-capture WS handler can run real
+    # MonoGS in-process (the api container ships the same CUDA +
+    # MonoGS stack worker-gs has — see Dockerfile.api). Without
+    # this, `torch.cuda.is_available()` is False inside the api and
+    # the live-session resolver falls through to the simulated
+    # tracker — which produces the camera-ray-fan placeholder cloud
+    # the user has consistently called out as useless.
+    runtime: nvidia
     environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       DATA_DIR: /data
       MODELS_DIR: /models
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -27,6 +37,14 @@ services:
       - models:/models
     ports:
       - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "8gb"
     # NOTE: no `depends_on: - base`. The `base` service is profile-gated
     # (`profiles: [build]`) so it never *runs* — it exists purely as a
     # build target for the shared image that api/worker-* FROM-extend.
