@@ -18,7 +18,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.cloud import dispatcher as cloud_dispatcher
 from app.cloud import session_creds as cloud_session_creds

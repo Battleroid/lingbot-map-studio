@@ -50,7 +50,7 @@ jobs:
 
       - name: pytest
         working-directory: worker
-        run: pytest -v --tb=long -ra
+        run: pytest -x -q
 
   web:
     name: web build
