@@ -102,11 +102,6 @@ RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     # NumPy 2.0 removed `np.unicode_`; same fix Dockerfile.gs applies —
     # keep them in lockstep.
     && sed -i 's|dtype=np\.unicode_|dtype=np.str_|g' utils/dataset.py \
-    # Switch mp.set_start_method("spawn") → "fork" so CUDA tensors
-    # survive the parent→child handoff without going through cudaIpc*.
-    # Same fix Dockerfile.gs applies — keep them in lockstep. See
-    # Dockerfile.gs for the full rationale.
-    && sed -i 's|^    mp.set_start_method("spawn")$|    mp.set_start_method("fork", force=True)  # patched: spawn fails CUDA IPC in container|' slam.py \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git

@@ -159,27 +159,6 @@ RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
     # call with `AttributeError: 'np.unicode_' was removed in the
     # NumPy 2.0 release`. Idempotent: second run finds no match.
     && sed -i 's|dtype=np\.unicode_|dtype=np.str_|g' utils/dataset.py \
-    # Switch the multiprocessing start method from "spawn" to "fork".
-    # Upstream `slam.py:209` forces `mp.set_start_method("spawn")`,
-    # which pickles `self.backend` (containing GaussianModel CUDA
-    # tensors) to hand it to the spawned child. The child then calls
-    # `cudaIpcOpenMemHandle` to reconstruct the tensors — and that
-    # IPC handle round-trip is fragile in containerized setups, even
-    # with `shm_size: 8gb`. Symptom on first frame:
-    #
-    #   File "torch/multiprocessing/reductions.py", in rebuild_cuda_tensor
-    #     storage = storage_cls._new_shared_cuda(...)
-    #   RuntimeError: CUDA error: invalid resource handle
-    #
-    # `fork` inherits the parent's CUDA context directly — no pickle,
-    # no IPC handle round-trip, just shared address space. PyTorch
-    # warns against fork+CUDA in general (cuBLAS / cuDNN / NCCL state
-    # can be tangled), but for MonoGS's batch backend (single GPU,
-    # single host, no NCCL, fresh cuBLAS handles created lazily) it
-    # works reliably. We force=True so multiple SLAM runs in the same
-    # python process can re-set the method without complaint.
-    # Idempotent: second run finds no match.
-    && sed -i 's|^    mp.set_start_method("spawn")$|    mp.set_start_method("fork", force=True)  # patched: spawn fails CUDA IPC in container|' slam.py \
     && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
     && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
     && rm -rf /opt/monogs/.git

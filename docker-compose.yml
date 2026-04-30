@@ -45,6 +45,19 @@ services:
               count: 1
               capabilities: [gpu]
     shm_size: "8gb"
+    # Share the host's IPC namespace so CUDA's IPC mechanism
+    # (cudaIpcOpenMemHandle, used by torch.multiprocessing to share
+    # CUDA tensors across spawned children) can resolve handles
+    # cleanly. Default `ipc: private` creates an isolated namespace
+    # that breaks CUDA IPC even when both processes are inside the
+    # same container — symptom is `RuntimeError: CUDA error: invalid
+    # resource handle` from `_new_shared_cuda` on the first frame
+    # the child receives. NVIDIA's official multi-process container
+    # docs recommend `ipc: host` for any container running
+    # multi-process CUDA workloads. MonoGS spawns a backend Process
+    # per SLAM session, so this is required for the post-stop
+    # reconstruction and the live-capture streaming wrapper.
+    ipc: host
     # NOTE: no `depends_on: - base`. The `base` service is profile-gated
     # (`profiles: [build]`) so it never *runs* — it exists purely as a
     # build target for the shared image that api/worker-* FROM-extend.
@@ -101,6 +114,7 @@ services:
               count: 1
               capabilities: [gpu]
     shm_size: "8gb"
+    ipc: host  # CUDA IPC for torch.multiprocessing — see api service comment.
     ulimits:
       memlock: -1
       stack: 67108864
@@ -140,6 +154,7 @@ services:
               count: 1
               capabilities: [gpu]
     shm_size: "8gb"
+    ipc: host  # CUDA IPC for torch.multiprocessing — see api service comment.
     ulimits:
       memlock: -1
       stack: 67108864
@@ -176,6 +191,7 @@ services:
               count: 1
               capabilities: [gpu]
     shm_size: "8gb"
+    ipc: host  # CUDA IPC for torch.multiprocessing — see api service comment.
     ulimits:
       memlock: -1
       stack: 67108864
