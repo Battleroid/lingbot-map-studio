@@ -1,10 +1,22 @@
 ### API container.
 ###
-### Runs FastAPI + the websocket handler, serves static artifacts, and
-### enqueues jobs into the DB-backed queue. Does no GPU inference itself.
-### Still needs pymeshlab/trimesh because the mesh-edit + lingbot reexport
-### endpoints run synchronously against CPU-only code; the heavy lingbot
-### inference deps live in `Dockerfile.lingbot`.
+### Runs FastAPI + the WebSocket handler, serves static artifacts, and
+### enqueues jobs into the DB-backed queue. Originally a pure CPU
+### container — but the live-capture WebSocket runs an in-process SLAM
+### session (see `app.cloud.capture_session`), which the user wants to
+### produce real reconstruction quality during the scan, not the
+### simulated tracker's camera-ray-fan placeholder.
+###
+### So this image now ships the same CUDA + torch + MonoGS stack that
+### `worker-gs` does. The api container needs `runtime: nvidia` in
+### docker-compose so `torch.cuda.is_available()` returns True; the
+### live-capture resolver in `app/processors/slam/live_session.py`
+### then promotes from the simulated `_MonogsSession` to the real
+### `MonogsCudaSession`.
+###
+### Trade-off: image grows from ~1 GB to ~10 GB+. Worth it because the
+### user has been explicit that simulated splat output is useless and
+### no live overlay means worse UX than slow-but-real geometry.
 ###
 ### Build: `docker build -t lingbot-studio/api:latest -f worker/Dockerfile.api worker`
 ARG BASE_IMAGE=lingbot-studio/base:latest
@@ -16,6 +28,61 @@ FROM ${BASE_IMAGE}
 RUN pip install \
         "pymeshlab==2023.12.post3" \
         "trimesh==4.4.1"
+
+# ─── live-capture SLAM stack ──────────────────────────────────────
+# Mirror of Dockerfile.gs's MonoGS install. The capture WebSocket
+# runs the SLAM session in-process here; it needs the same real
+# CUDA backend the post-stop worker-gs jobs use.
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:${PATH}
+
+# CUDA-extension build configuration. The build host has no GPU,
+# so torch.cuda.is_available() returns False and naive setup.py
+# scripts that probe for runtime CUDA bail. FORCE_CUDA + an explicit
+# arch list works around it for diff-gaussian-rasterization /
+# simple-knn.
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+
+# torch+cu121 (matches the worker-gs pin so the api and the worker
+# can share GPU memory cleanly when both are running).
+RUN pip install --index-url https://download.pytorch.org/whl/cu121 \
+        "torch==2.3.1" "torchvision==0.18.1"
+
+# MonoGS pip deps (mirror of Dockerfile.gs lines 64-77). munch /
+# pyyaml / imageio / lpips / wandb / evo / matplotlib / open3d are
+# all imported eagerly by upstream MonoGS, so a missing one is a
+# hard ImportError on first frame of capture.
+RUN pip install --no-cache-dir \
+        "scipy==1.13.1" \
+        "einops==0.8.0" \
+        "plyfile==1.1" \
+        "munch==4.0.0" \
+        "pyyaml==6.0.1" \
+        "imageio==2.34.2" \
+        "lpips==0.1.4" \
+        "wandb==0.17.7" \
+        "evo==1.28.0" \
+        "matplotlib==3.9.2" \
+        "open3d==0.18.0"
+
+# Build deps for MonoGS's CUDA submodule compiles.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential ninja-build git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone MonoGS + build its CUDA submodules. Strict (no `|| echo`
+# fallback) — if the build fails we want the api image to fail
+# loudly at build time rather than ship a broken capture flow.
+ARG MONOGS_SHA=main
+RUN git clone --recursive https://github.com/muskie82/MonoGS.git /opt/monogs \
+    && cd /opt/monogs \
+    && git checkout ${MONOGS_SHA} \
+    && pip install --no-cache-dir --no-build-isolation submodules/diff-gaussian-rasterization \
+    && pip install --no-cache-dir --no-build-isolation submodules/simple-knn \
+    && rm -rf /opt/monogs/.git
+ENV PYTHONPATH=/opt/monogs:$PYTHONPATH
 
 EXPOSE 8000
 

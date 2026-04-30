@@ -259,18 +259,6 @@ function CapturePageInner() {
           fps={10}
           deviceId={deviceId}
         />
-        {/* Real-space points overlay. The candy-stripe mask we tried
-         *  before kept "filling in" within seconds because the
-         *  simulated SLAM tracker scatters feature corners widely
-         *  across each frame and a single point claimed a whole 10°
-         *  cone in the 36×18 az/el bucket grid — so the stripes
-         *  disappeared and were never seen again. This replaces it
-         *  with the actual SLAM point cloud rendered as 3D dots
-         *  through the live camera basis: dots stay stuck to the
-         *  world locations the tracker has observed, areas with no
-         *  dots haven't been scanned. Same "show me what's been
-         *  captured vs not" cue, no projection or coverage shader
-         *  needed. */}
         {capturing && <CameraOverlayPoints />}
       </div>
 
